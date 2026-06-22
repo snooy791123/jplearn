@@ -100,6 +100,33 @@ const IcDatabase = (p) => <Icon {...p} d={<><ellipse cx="12" cy="5" rx="9" ry="3
 const IcCloud = (p) => <Icon {...p} d={<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>} />;
 const IcCloudOff = (p) => <Icon {...p} d={<><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/></>} />;
 const IcMic = (p) => <Icon {...p} d={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></>} />;
+const IcBrain = (p) => <Icon {...p} d={<path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2zm5 0A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/>} />;
+
+// ---------- SRS 間隔複習核心（SM-2 簡化版） ----------
+const DAY = 86400000;
+const todayStr = () => new Date().toISOString();
+// 給單字補上 SRS 預設欄位
+const withSrs = (item) => ({
+  reps: 0, interval: 0, ease: 2.5, due: todayStr(),
+  ...item
+});
+// 依評價算下次複習。grade: 0=忘了 1=模糊 2=記得
+const scheduleNext = (card, grade) => {
+  let { reps = 0, interval = 0, ease = 2.5 } = card;
+  if (grade === 0) {            // 忘了：重來，明天再考
+    reps = 0; interval = 1; ease = Math.max(1.3, ease - 0.2);
+  } else if (grade === 1) {     // 模糊：小幅前進
+    reps += 1; ease = Math.max(1.3, ease - 0.05);
+    interval = interval < 1 ? 1 : Math.max(1, Math.round(interval * 1.2));
+  } else {                       // 記得：正常拉長
+    reps += 1; ease = ease + 0.1;
+    if (reps === 1) interval = 1;
+    else if (reps === 2) interval = 3;
+    else interval = Math.round(interval * ease);
+  }
+  const due = new Date(Date.now() + interval * DAY).toISOString();
+  return { reps, interval, ease, due };
+};
 
 // ---------- 本機快取 ----------
 const cacheKey = (cat) => `${CACHE_PREFIX}${cat.id}:${cat.title}`;
@@ -107,7 +134,7 @@ const readCache = (cat) => { try { const r = localStorage.getItem(cacheKey(cat))
 const writeCache = (cat, items) => {
   try {
     const ex = readCache(cat); const seen = new Set(ex.map(v => v.word));
-    const merged = [...ex, ...items.filter(v => !seen.has(v.word))];
+    const merged = [...ex, ...items.filter(v => !seen.has(v.word)).map(withSrs)];
     localStorage.setItem(cacheKey(cat), JSON.stringify(merged)); return merged;
   } catch { return items; }
 };
@@ -117,13 +144,49 @@ const sampleFromCache = (cat, n) => {
   return [...all].sort(() => Math.random() - 0.5).slice(0, n);
 };
 
+// 列出全字庫今天到期該複習的字（跨所有分類）
+const getDueCards = () => {
+  const now = Date.now();
+  const due = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(CACHE_PREFIX)) continue;
+    try {
+      const arr = JSON.parse(localStorage.getItem(key) || '[]');
+      arr.forEach((c) => {
+        const d = c.due ? new Date(c.due).getTime() : now;
+        if (d <= now) due.push({ ...c, _key: key });
+      });
+    } catch {}
+  }
+  return due.sort((a, b) => new Date(a.due || 0) - new Date(b.due || 0));
+};
+
+// 更新某個字的 SRS 進度，寫回它所在的 localStorage key
+const updateCardSrs = (card, srs) => {
+  try {
+    const arr = JSON.parse(localStorage.getItem(card._key) || '[]');
+    const idx = arr.findIndex((c) => c.id === card.id || c.word === card.word);
+    if (idx >= 0) { arr[idx] = { ...arr[idx], ...srs }; localStorage.setItem(card._key, JSON.stringify(arr)); }
+  } catch {}
+};
+
 // ---------- 雲端同步 ----------
 const pushToSheet = (cat, items) => {
   if (!SHEET_API_URL) return Promise.resolve(false);
   return fetch(SHEET_API_URL, {
     method: 'POST', mode: 'no-cors',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ items: items.map(v => ({ ...v, category: cat.id })) })
+    body: JSON.stringify({ action: 'add', items: items.map(v => ({ ...v, category: cat.id })) })
+  }).then(() => true).catch(() => false);
+};
+// 把複習進度更新同步到試算表
+const pushSrsToSheet = (updates) => {
+  if (!SHEET_API_URL || !updates.length) return Promise.resolve(false);
+  return fetch(SHEET_API_URL, {
+    method: 'POST', mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'updateSrs', updates })
   }).then(() => true).catch(() => false);
 };
 const pullFromSheet = async () => {
@@ -140,9 +203,25 @@ const pullFromSheet = async () => {
     Object.keys(byCat).forEach(k => {
       try {
         const ex = JSON.parse(localStorage.getItem(k) || '[]');
-        const seen = new Set(ex.map(v => v.word));
-        const merged = [...ex, ...byCat[k].filter(v => !seen.has(v.word))];
-        localStorage.setItem(k, JSON.stringify(merged)); total += byCat[k].length;
+        const exMap = {}; ex.forEach(v => { exMap[v.word] = v; });
+        byCat[k].forEach(row => {
+          // 正規化 SRS 欄位型別
+          const srs = {
+            reps: Number(row.reps) || 0,
+            interval: Number(row.interval) || 0,
+            ease: Number(row.ease) || 2.5,
+            due: row.due || todayStr()
+          };
+          if (exMap[row.word]) {
+            // 已存在 → 用雲端的 SRS 進度覆蓋（雲端視為較新）
+            Object.assign(exMap[row.word], srs);
+          } else {
+            // 新字 → 整筆加入
+            const item = withSrs({ ...row, ...srs });
+            ex.push(item); exMap[row.word] = item;
+          }
+        });
+        localStorage.setItem(k, JSON.stringify(ex)); total += byCat[k].length;
       } catch {}
     });
     return total;
@@ -183,6 +262,15 @@ function App() {
   const [cloudState, setCloudState] = useState(SHEET_API_URL ? 'syncing' : 'off');
   const [cacheCounts, setCacheCounts] = useState({});
 
+  // SRS 複習 state
+  const [reviewMode, setReviewMode] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState([]);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewFlipped, setReviewFlipped] = useState(false);
+  const [reviewDone, setReviewDone] = useState(0);
+  const [dueCount, setDueCount] = useState(0);
+  const srsPendingRef = React.useRef([]); // 累積要同步雲端的進度
+
   // 對話練習 state
   const [activeScene, setActiveScene] = useState(null);
   const [messages, setMessages] = useState([]); // {role:'user'|'model', text, reading, translation, correction}
@@ -213,6 +301,46 @@ function App() {
 
   const refreshCounts = () => {
     const c = {}; CATEGORIES.forEach(cat => { c[cat.id] = readCache(cat).length; }); setCacheCounts(c);
+    setDueCount(getDueCards().length);
+  };
+
+  // 開始今日複習
+  const startReview = () => {
+    const due = getDueCards();
+    if (due.length === 0) return;
+    setReviewQueue(due);
+    setReviewIndex(0); setReviewFlipped(false); setReviewDone(0);
+    srsPendingRef.current = [];
+    setReviewMode(true);
+  };
+
+  // 評價當前複習卡。grade: 0忘了 1模糊 2記得
+  const gradeCard = (grade) => {
+    const card = reviewQueue[reviewIndex];
+    if (!card) return;
+    const srs = scheduleNext(card, grade);
+    updateCardSrs(card, srs);                       // 寫回本機
+    srsPendingRef.current.push({ id: card.id, ...srs }); // 累積待同步
+
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    const next = reviewIndex + 1;
+    setReviewDone(d => d + 1);
+    if (next >= reviewQueue.length) {
+      // 複習結束：一次把進度同步到雲端
+      if (SHEET_API_URL && srsPendingRef.current.length) pushSrsToSheet(srsPendingRef.current);
+      refreshCounts();
+      setReviewIndex(next); // 觸發結算畫面
+    } else {
+      setReviewIndex(next); setReviewFlipped(false);
+    }
+  };
+
+  const closeReview = () => {
+    if (SHEET_API_URL && srsPendingRef.current.length) pushSrsToSheet(srsPendingRef.current);
+    srsPendingRef.current = [];
+    setReviewMode(false); setReviewQueue([]); setReviewIndex(0); setReviewFlipped(false);
+    refreshCounts();
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
   };
 
   const loadVocab = async (category, forceAI = false) => {
@@ -649,6 +777,21 @@ ${levelInstr}
           )}
         </div>
 
+        {/* 今日複習入口 */}
+        {dueCount > 0 && (
+          <button className="lm-btn" onClick={startReview}
+            style={{ width:'100%', display:'flex', alignItems:'center', gap:16, padding:'18px 22px', border:'2px solid var(--accent)', borderRadius:4, background:'rgba(46,58,102,.05)', textAlign:'left', marginBottom:'clamp(28px,4vw,40px)', transition:'all .2s' }}
+            onMouseEnter={(e)=>{ e.currentTarget.style.background='rgba(46,58,102,.1)'; e.currentTarget.style.transform='translateY(-2px)'; }}
+            onMouseLeave={(e)=>{ e.currentTarget.style.background='rgba(46,58,102,.05)'; e.currentTarget.style.transform='none'; }}>
+            <span style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcBrain size={24} /></span>
+            <span style={{ display:'flex', flexDirection:'column', gap:2, flex:1 }}>
+              <span className="lm-serif" style={{ fontSize:'clamp(18px,3vw,22px)', fontWeight:500, color:'var(--accent)' }}>今日複習</span>
+              <span style={{ fontSize:13, color:'var(--ink-soft)' }}>有 <b style={{ color:'var(--accent)' }}>{dueCount}</b> 個字到了該複習的時間</span>
+            </span>
+            <IcRight size={20} style={{ color:'var(--accent)', flexShrink:0 }} />
+          </button>
+        )}
+
         <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
           {CATEGORIES.map((cat) => (
             <button key={cat.id} className="lm-btn"
@@ -1078,6 +1221,85 @@ ${levelInstr}
           </div>
         </div>
       )}
+
+      {/* SRS 複習介面 */}
+      {reviewMode && (() => {
+        const finished = reviewIndex >= reviewQueue.length;
+        const rc = reviewQueue[reviewIndex];
+        const isJa = rc?.lang === 'ja-JP';
+        return (
+          <div style={{ position:'fixed', inset:0, zIndex:58, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
+            <div className="lm-paper-texture" />
+
+            {/* 頂列 */}
+            <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(16px,3vw,24px) clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <IcBrain size={22} style={{ color:'var(--accent)' }} />
+                <div>
+                  <div className="lm-serif" style={{ fontSize:'clamp(18px,3vw,22px)', fontWeight:500 }}>今日複習</div>
+                  {!finished && <div style={{ fontSize:11, color:'var(--ink-soft)' }}>{reviewIndex + 1} / {reviewQueue.length}</div>}
+                </div>
+              </div>
+              <button onClick={closeReview} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
+            </div>
+
+            {/* 進度條 */}
+            {!finished && (
+              <div style={{ position:'relative', zIndex:10, height:3, background:'var(--rule)', flexShrink:0 }}>
+                <div style={{ height:'100%', background:'var(--accent)', width:`${(reviewIndex / reviewQueue.length) * 100}%`, transition:'width .3s' }} />
+              </div>
+            )}
+
+            {/* 內容 */}
+            <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'clamp(20px,4vw,40px)' }}>
+              {finished ? (
+                /* 結算 */
+                <div style={{ textAlign:'center', maxWidth:420 }} className="lm-rise">
+                  <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
+                  <h2 className="lm-serif" style={{ fontSize:'clamp(24px,5vw,32px)', fontWeight:500, margin:'0 0 12px' }}>複習完成</h2>
+                  <p className="lm-serif" style={{ fontSize:17, color:'var(--ink-soft)', lineHeight:1.6, margin:'0 0 28px' }}>今天複習了 {reviewDone} 個字。<br />記得的字下次會晚點再出現，忘記的明天見。</p>
+                  <button onClick={closeReview} className="lm-btn" style={{ background:'var(--ink)', color:'var(--paper)', padding:'13px 28px', borderRadius:2, fontSize:14 }}>回首頁</button>
+                </div>
+              ) : rc ? (
+                /* 複習卡 */
+                <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:500 }}>
+                  <div className={`lm-flip ${reviewFlipped ? 'is-flipped' : ''}`} onClick={() => setReviewFlipped(f => !f)}
+                    style={{ minHeight:'clamp(320px,48vh,420px)', cursor:'pointer' }} role="button" tabIndex={0}>
+                    {/* 正面：只有字 */}
+                    <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
+                      <h2 className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(40px,10vw,72px)', fontWeight: isJa ? 600 : 500, margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{rc.word}</h2>
+                      <span className="lm-serif" style={{ position:'absolute', bottom:20, fontStyle:'italic', fontSize:13, color:'var(--ink-soft)' }}>點卡片看答案 ·</span>
+                    </div>
+                    {/* 背面 */}
+                    <div className="lm-face back" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', justifyContent:'center' }}>
+                      <div style={{ display:'flex', alignItems:'baseline', gap:12, flexWrap:'wrap', marginBottom:8 }}>
+                        <span className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(24px,5vw,34px)', fontWeight: isJa ? 600 : 500 }}>{rc.word}</span>
+                        {rc.reading && <span style={{ fontSize:14, color:'var(--ink-soft)', fontStyle:'italic' }}>{rc.reading}</span>}
+                        <button onClick={(e) => { e.stopPropagation(); isJa ? speakHQ(rc.word, 'rv') : speak(rc.word, rc.lang, 'rv'); }} className="lm-btn" aria-label="發音" style={{ color:'var(--accent)' }}>{hqLoadingId==='rv' ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={16} />}</button>
+                      </div>
+                      <p className="lm-serif" style={{ fontSize:'clamp(22px,4vw,28px)', fontWeight:500, color:'var(--accent)', margin:'0 0 16px' }}>{rc.translation}</p>
+                      {rc.sentence && (
+                        <div style={{ borderTop:'1px solid var(--rule)', paddingTop:14 }}>
+                          <p className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.6, margin:0 }}>{rc.sentence}</p>
+                          {rc.sentenceTranslation && <p className="lm-serif" style={{ fontSize:14, color:'var(--ink-soft)', margin:'6px 0 0' }}>{rc.sentenceTranslation}</p>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 評價鈕：翻面後才出現 */}
+                  <div style={{ marginTop:20, display:'flex', gap:10, opacity: reviewFlipped ? 1 : 0.35, pointerEvents: reviewFlipped ? 'auto' : 'none', transition:'opacity .3s' }}>
+                    <button onClick={() => gradeCard(0)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid #C25', color:'#C25', background:'transparent', fontSize:14, fontWeight:500 }}>忘了<div style={{ fontSize:10, opacity:.6, marginTop:2 }}>明天再考</div></button>
+                    <button onClick={() => gradeCard(1)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid var(--ink-soft)', color:'var(--ink)', background:'transparent', fontSize:14, fontWeight:500 }}>模糊<div style={{ fontSize:10, opacity:.6, marginTop:2 }}>過幾天</div></button>
+                    <button onClick={() => gradeCard(2)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid var(--accent)', color:'var(--paper)', background:'var(--accent)', fontSize:14, fontWeight:500 }}>記得<div style={{ fontSize:10, opacity:.7, marginTop:2 }}>拉長間隔</div></button>
+                  </div>
+                  {!reviewFlipped && <p style={{ textAlign:'center', fontSize:12, color:'var(--ink-soft)', marginTop:14 }}>先想一下意思，再翻面評價</p>}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
