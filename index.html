@@ -266,34 +266,65 @@ function App() {
   const [voiceWarn, setVoiceWarn] = useState('');
   const [hqLoadingId, setHqLoadingId] = useState(null);
   const hqAudioRef = React.useRef(null);
-  const touchRef = React.useRef({ x: 0, y: 0, t: 0 });
+  const dragRef = React.useRef({ x: 0, y: 0, t: 0, moved: false, active: false });
+  const cardElRef = React.useRef(null); // 當前可拖曳卡片的 DOM
 
-  // 產生左右滑手勢處理器：onLeft 往左滑(下一張)、onRight 往右滑(上一張)、onTap 輕點
-  const makeSwipe = (onLeft, onRight, onTap) => ({
-    onTouchStart: (e) => {
-      const t = e.touches[0];
-      touchRef.current = { x: t.clientX, y: t.clientY, t: Date.now(), moved: false };
-    },
-    onTouchMove: (e) => {
-      const t = e.touches[0];
-      const dx = Math.abs(t.clientX - touchRef.current.x);
-      const dy = Math.abs(t.clientY - touchRef.current.y);
-      if (dx > 8 || dy > 8) touchRef.current.moved = true;
-    },
-    onTouchEnd: (e) => {
-      const t = e.changedTouches[0];
-      const dx = t.clientX - touchRef.current.x;
-      const dy = t.clientY - touchRef.current.y;
-      const dt = Date.now() - touchRef.current.t;
-      const absX = Math.abs(dx), absY = Math.abs(dy);
-      if (absX > 40 && absX > absY && dt < 700) {
-        // 確實是橫向滑動
-        if (dx < 0) onLeft && onLeft(); else onRight && onRight();
-      } else if (!touchRef.current.moved && onTap) {
-        onTap(); // 沒怎麼移動 = 輕點
+  // Tinder 式拖曳：拖曳跟手+傾斜+淡出，放開飛出或彈回
+  // onCommit(dir): dir=-1 往左飛(下一張/忘了)，dir=1 往右飛(上一張/記得)
+  // onTap: 輕點翻面。canSwipe: 是否允許左右飛出（複習未翻面時不給飛）
+  const makeDrag = (onCommit, onTap, canSwipe = true) => {
+    const setTransform = (x, withTransition) => {
+      const el = cardElRef.current;
+      if (!el) return;
+      const rot = x / 18; // 傾斜角度隨位移
+      const opacity = Math.max(0, 1 - Math.abs(x) / 600);
+      el.style.transition = withTransition ? 'transform .35s cubic-bezier(.2,.7,.2,1), opacity .35s' : 'none';
+      el.style.transform = `translateX(${x}px) rotate(${rot}deg)`;
+      el.style.opacity = opacity;
+    };
+    return {
+      ref: (node) => { if (node) cardElRef.current = node; },
+      onTouchStart: (e) => {
+        const t = e.touches[0];
+        dragRef.current = { x: t.clientX, y: t.clientY, t: Date.now(), moved: false, active: true };
+      },
+      onTouchMove: (e) => {
+        if (!dragRef.current.active) return;
+        const t = e.touches[0];
+        const dx = t.clientX - dragRef.current.x;
+        const dy = t.clientY - dragRef.current.y;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) dragRef.current.moved = true;
+        // 橫向為主才跟手（避免跟垂直捲動打架）
+        if (Math.abs(dx) > Math.abs(dy)) setTransform(dx, false);
+      },
+      onTouchEnd: (e) => {
+        if (!dragRef.current.active) return;
+        dragRef.current.active = false;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - dragRef.current.x;
+        const dy = t.clientY - dragRef.current.y;
+        const absX = Math.abs(dx), absY = Math.abs(dy);
+        const threshold = 90;
+        if (canSwipe && absX > threshold && absX > absY) {
+          // 飛出去
+          const dir = dx < 0 ? -1 : 1;
+          const el = cardElRef.current;
+          if (el) {
+            el.style.transition = 'transform .3s ease-out, opacity .3s';
+            el.style.transform = `translateX(${dir * 700}px) rotate(${dir * 30}deg)`;
+            el.style.opacity = '0';
+          }
+          setTimeout(() => { setTransform(0, false); onCommit && onCommit(dir); }, 220);
+        } else if (!dragRef.current.moved && onTap) {
+          setTransform(0, false);
+          onTap();
+        } else {
+          // 彈回
+          setTransform(0, true);
+        }
       }
-    }
-  });
+    };
+  };
   const [cloudState, setCloudState] = useState(SHEET_API_URL ? 'syncing' : 'off');
   const [cacheCounts, setCacheCounts] = useState({});
 
@@ -959,11 +990,13 @@ ${levelInstr}
                 ) : null}
               </div>
             ) : card ? (
-              <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:540 }}
-                {...makeSwipe(() => goTo(1), () => goTo(-1))}>
-                <div className={`lm-flip ${flipped ? 'is-flipped' : ''}`} onClick={() => { if (!touchRef.current.moved) setFlipped(f => !f); }}
-                  style={{ minHeight:'clamp(360px,55vh,460px)', cursor:'pointer' }} role="button" aria-label="翻面" tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter') setFlipped(f => !f); }}>
+              <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:540 }}>
+                <div ref={(node) => { if (node) cardElRef.current = node; }}
+                  {...(() => { const h = makeDrag((dir) => goTo(dir < 0 ? 1 : -1), () => setFlipped(f => !f), true); const { ref, ...rest } = h; return rest; })()}
+                  style={{ willChange:'transform' }}>
+                  <div className={`lm-flip ${flipped ? 'is-flipped' : ''}`}
+                    style={{ minHeight:'clamp(360px,55vh,460px)', cursor:'pointer' }} role="button" aria-label="翻面" tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === 'Enter') setFlipped(f => !f); }}>
                   <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 1px 0 var(--rule), 0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
                     <span style={{ position:'absolute', top:20, left:24, fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--ink-soft)' }}>正面</span>
                     <h2 className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(44px,11vw,84px)', fontWeight: isJaCard ? 600 : 500, letterSpacing:'-.02em', margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{card.word}</h2>
@@ -998,6 +1031,7 @@ ${levelInstr}
                         <p className="lm-serif" style={{ fontSize:15, color:'var(--ink-soft)', margin:'8px 0 0' }}>{card.sentenceTranslation}</p>
                       </div>
                     </div>
+                  </div>
                   </div>
                 </div>
               </div>
@@ -1298,12 +1332,11 @@ ${levelInstr}
                 </div>
               ) : rc ? (
                 /* 複習卡 */
-                <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:500 }}
-                  {...makeSwipe(
-                    () => reviewFlipped && gradeCard(0),
-                    () => reviewFlipped && gradeCard(2)
-                  )}>
-                  <div className={`lm-flip ${reviewFlipped ? 'is-flipped' : ''}`} onClick={() => { if (!touchRef.current.moved) setReviewFlipped(f => !f); }}
+                <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:500 }}>
+                  <div ref={(node) => { if (node) cardElRef.current = node; }}
+                    {...(() => { const h = makeDrag((dir) => { dir < 0 ? gradeCard(0) : gradeCard(2); }, () => setReviewFlipped(f => !f), reviewFlipped); const { ref, ...rest } = h; return rest; })()}
+                    style={{ willChange:'transform' }}>
+                  <div className={`lm-flip ${reviewFlipped ? 'is-flipped' : ''}`}
                     style={{ minHeight:'clamp(320px,48vh,420px)', cursor:'pointer' }} role="button" tabIndex={0}>
                     {/* 正面：只有字 */}
                     <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
@@ -1325,6 +1358,7 @@ ${levelInstr}
                         </div>
                       )}
                     </div>
+                  </div>
                   </div>
 
                   {/* 評價鈕：翻面後才出現 */}
