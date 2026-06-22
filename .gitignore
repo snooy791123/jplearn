@@ -1,0 +1,9 @@
+# 環境變數（絕對不要進 git，key 在這裡）
+.env
+.env.local
+.env*.local
+
+# 依賴與建置
+node_modules/
+.vercel/
+.DS_Store
