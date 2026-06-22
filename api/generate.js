@@ -49,6 +49,40 @@ export default async function handler(req, res) {
     const body = req.body || {};
     const mode = body.mode || 'json';
 
+    // ---------- 新聞模式：抓 NHK RSS，解析成 JSON ----------
+    if (mode === 'news') {
+      const NHK_RSS = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+      try {
+        const r = await fetch(NHK_RSS, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!r.ok) throw new Error('NHK ' + r.status);
+        const xml = await r.text();
+
+        // 簡單解析 <item>，取 title / link / description / pubDate
+        const items = [];
+        const itemBlocks = xml.split('<item>').slice(1);
+        const pick = (block, tag) => {
+          // 支援 CDATA 與一般文字
+          const re = new RegExp('<' + tag + '>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</' + tag + '>');
+          const m = block.match(re);
+          return m ? m[1].trim() : '';
+        };
+        for (const block of itemBlocks) {
+          const title = pick(block, 'title');
+          if (!title) continue;
+          items.push({
+            title,
+            link: pick(block, 'link'),
+            description: pick(block, 'description'),
+            pubDate: pick(block, 'pubDate')
+          });
+          if (items.length >= 12) break;
+        }
+        return res.status(200).json({ ok: true, items });
+      } catch (err) {
+        return res.status(502).json({ ok: false, error: 'NHK fetch failed: ' + String(err) });
+      }
+    }
+
     // ---------- 對話模式 ----------
     if (mode === 'chat') {
       const { systemPrompt, history } = body;
