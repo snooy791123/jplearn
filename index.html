@@ -178,6 +178,8 @@ function App() {
   const [storyError, setStoryError] = useState('');
   const [speakingId, setSpeakingId] = useState(null);
   const [voiceWarn, setVoiceWarn] = useState('');
+  const [hqLoadingId, setHqLoadingId] = useState(null);
+  const hqAudioRef = React.useRef(null);
   const [cloudState, setCloudState] = useState(SHEET_API_URL ? 'syncing' : 'off');
   const [cacheCounts, setCacheCounts] = useState({});
 
@@ -278,6 +280,56 @@ function App() {
   };
 
   // 從裝置語音清單挑出符合語言的語音；挑不到回 null
+  // 把 base64 PCM(L16) 組成 WAV，回傳可播放的 blob URL
+  const pcmToWavUrl = (base64, sampleRate) => {
+    const bin = atob(base64);
+    const len = bin.length;
+    const pcm = new Uint8Array(len);
+    for (let i = 0; i < len; i++) pcm[i] = bin.charCodeAt(i);
+    const buffer = new ArrayBuffer(44 + len);
+    const view = new DataView(buffer);
+    const wStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+    wStr(0, 'RIFF'); view.setUint32(4, 36 + len, true); wStr(8, 'WAVE');
+    wStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    wStr(36, 'data'); view.setUint32(40, len, true);
+    new Uint8Array(buffer, 44).set(pcm);
+    return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  };
+
+  // 高品質語音（Gemini TTS）
+  const speakHQ = async (text, id) => {
+    if (!text) return;
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (hqAudioRef.current) { hqAudioRef.current.pause(); hqAudioRef.current = null; }
+    setHqLoadingId(id); setSpeakingId(null);
+    try {
+      const r = await fetch(API_ENDPOINT, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'tts', text, voice: 'Kore' })
+      });
+      const data = await r.json();
+      if (!data.ok || !data.audio) throw new Error('no audio');
+      // 從 mimeType 取 rate，預設 24000
+      const m = /rate=(\d+)/.exec(data.mimeType || '');
+      const rate = m ? parseInt(m[1], 10) : 24000;
+      const url = pcmToWavUrl(data.audio, rate);
+      const audio = new Audio(url);
+      hqAudioRef.current = audio;
+      setHqLoadingId(null); setSpeakingId(id);
+      audio.onended = () => { setSpeakingId(null); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setSpeakingId(null); };
+      audio.play();
+    } catch {
+      setHqLoadingId(null);
+      setVoiceWarn('高品質語音暫時無法使用（Preview 偶爾不穩），已改用一般發音。');
+      setTimeout(() => setVoiceWarn(''), 4000);
+      // 退回一般發音
+      speak(text, 'ja-JP', id);
+    }
+  };
+
   const pickVoice = (lang) => {
     const voices = window.speechSynthesis.getVoices() || [];
     const want = lang.toLowerCase().split('-')[0]; // 'ja' or 'en'
@@ -736,10 +788,18 @@ ${levelInstr}
                   <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 1px 0 var(--rule), 0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
                     <span style={{ position:'absolute', top:20, left:24, fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--ink-soft)' }}>正面</span>
                     <h2 className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(44px,11vw,84px)', fontWeight: isJaCard ? 600 : 500, letterSpacing:'-.02em', margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{card.word}</h2>
-                    <button onClick={(e) => { e.stopPropagation(); speak(card.word, card.lang, card.id); }} className="lm-btn" aria-label="發音"
-                      style={{ marginTop:28, display:'inline-flex', alignItems:'center', gap:8, color: speakingId === card.id ? 'var(--paper)' : 'var(--accent)', background: speakingId === card.id ? 'var(--accent)' : 'transparent', border:'1px solid var(--accent)', borderRadius:999, padding:'8px 18px', fontSize:13 }}>
-                      <IcVolume size={15} /> 發音
-                    </button>
+                    <div style={{ marginTop:28, display:'flex', gap:10, alignItems:'center' }}>
+                      <button onClick={(e) => { e.stopPropagation(); speak(card.word, card.lang, card.id); }} className="lm-btn" aria-label="發音"
+                        style={{ display:'inline-flex', alignItems:'center', gap:8, color: speakingId === card.id ? 'var(--paper)' : 'var(--accent)', background: speakingId === card.id ? 'var(--accent)' : 'transparent', border:'1px solid var(--accent)', borderRadius:999, padding:'8px 18px', fontSize:13 }}>
+                        <IcVolume size={15} /> 發音
+                      </button>
+                      {isJaCard && (
+                        <button onClick={(e) => { e.stopPropagation(); speakHQ(card.word, card.id); }} className="lm-btn" aria-label="高品質發音"
+                          style={{ display:'inline-flex', alignItems:'center', gap:6, color:'var(--ink-soft)', background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:999, padding:'8px 14px', fontSize:12 }}>
+                          {hqLoadingId===card.id ? <span className="lm-dot" /> : '✨'} 高品質
+                        </button>
+                      )}
+                    </div>
                     <span className="lm-serif" style={{ position:'absolute', bottom:20, fontStyle:'italic', fontSize:13, color:'var(--ink-soft)' }}>點卡片翻面 ·</span>
                   </div>
                   <div className="lm-face back lm-hide-scroll" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', overflowY:'auto' }}>
@@ -830,8 +890,9 @@ ${levelInstr}
                     <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
                       <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(16px,3vw,19px)', lineHeight:1.6, margin:0, flex:1, color: m.isError ? '#A35' : 'var(--ink)' }}>{m.text}</p>
                       {!m.isError && (
-                        <button onClick={() => speak(m.text, activeScene.lang, 'chat-'+i)} className="lm-btn" aria-label="播放"
-                          style={{ flexShrink:0, width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={13} /></button>
+                        <button onClick={() => activeScene.lang==='ja-JP' ? speakHQ(m.text, 'chat-'+i) : speak(m.text, activeScene.lang, 'chat-'+i)} className="lm-btn" aria-label="播放"
+                          style={{ flexShrink:0, width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                          {hqLoadingId==='chat-'+i ? <span className="lm-dot" style={{ background:'var(--paper)' }} /> : <IcVolume size={13} />}</button>
                       )}
                     </div>
                     {m.reading && <p style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', margin:'8px 0 0' }}>{m.reading}</p>}
@@ -949,8 +1010,9 @@ ${levelInstr}
                 ) : activeArticle.processed ? (
                   <div>
                     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
-                      <button onClick={() => speak(activeArticle.processed.simplified, 'ja-JP', 'news')} className="lm-btn"
-                        style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:12, color:'var(--accent)', border:'1px solid var(--accent)', borderRadius:999, padding:'7px 16px' }}><IcVolume size={14} /> 朗讀</button>
+                      <button onClick={() => speakHQ(activeArticle.processed.simplified, 'news')} className="lm-btn"
+                        style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:12, color:'var(--accent)', border:'1px solid var(--accent)', borderRadius:999, padding:'7px 16px' }}>
+                        {hqLoadingId==='news' ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={14} />} ✨高品質朗讀</button>
                     </div>
                     <p className="lm-jp-serif" style={{ fontSize:'clamp(17px,3.5vw,21px)', lineHeight:2, margin:0 }}>{activeArticle.processed.simplified}</p>
                     {activeArticle.processed.reading && (
@@ -973,7 +1035,7 @@ ${levelInstr}
                               <span className="lm-jp-serif" style={{ fontSize:17, fontWeight:600, flexShrink:0 }}>{w.word}</span>
                               {w.reading && <span style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', flexShrink:0 }}>{w.reading}</span>}
                               <span className="lm-serif" style={{ fontSize:14, color:'var(--ink)', flex:1, textAlign:'right' }}>{w.meaning}</span>
-                              <button onClick={() => speak(w.word, 'ja-JP', 'nw-'+i)} className="lm-btn" aria-label="發音" style={{ flexShrink:0, color:'var(--accent)' }}><IcVolume size={15} /></button>
+                              <button onClick={() => speakHQ(w.word, 'nw-'+i)} className="lm-btn" aria-label="高品質發音" style={{ flexShrink:0, color:'var(--accent)' }}>{hqLoadingId==='nw-'+i ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={15} />}</button>
                             </div>
                           ))}
                         </div>
