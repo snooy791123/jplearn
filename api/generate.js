@@ -69,10 +69,13 @@ export default async function handler(req, res) {
           responseSchema: {
             type: 'OBJECT',
             properties: {
-              reply: { type: 'STRING', description: '角色用該語言的自然回覆' },
+              userTarget: { type: 'STRING', description: '使用者上一句「翻成目標語言」的自然說法。若使用者本來就用目標語言講且正確，原樣放這；若使用者打的是中文，這裡放對應的目標語言說法。沒有使用者發言則空字串。' },
+              userReading: { type: 'STRING', description: 'userTarget 的讀音（日文假名/羅馬拼音，英文音標）。沒有則空字串。' },
+              userMeaning: { type: 'STRING', description: '使用者那句話的繁體中文意思。沒有則空字串。' },
+              reply: { type: 'STRING', description: '角色用目標語言的自然回覆' },
               replyReading: { type: 'STRING', description: '回覆的讀音（日文假名/羅馬拼音，英文音標）' },
               replyTranslation: { type: 'STRING', description: '回覆的繁體中文翻譯' },
-              correction: { type: 'STRING', description: '針對使用者上一句的糾錯與更道地說法；若使用者沒講錯或還沒開口則回空字串' }
+              correction: { type: 'STRING', description: '若使用者用目標語言但有錯，指出並給更道地說法；若使用者打中文，這裡簡短說明「你想說的可以這樣講」；都沒問題則空字串' }
             },
             required: ['reply', 'replyTranslation']
           }
