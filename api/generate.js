@@ -49,6 +49,43 @@ export default async function handler(req, res) {
     const body = req.body || {};
     const mode = body.mode || 'json';
 
+    // ---------- 語音合成模式：用 Gemini TTS 生成高品質語音 ----------
+    if (mode === 'tts') {
+      const { text, voice } = body;
+      if (!text) return res.status(400).json({ error: 'Missing text' });
+      const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: voice || 'Kore' } }
+          }
+        }
+      };
+      // Preview 模型偶爾會回文字而非音訊導致 500，故帶重試
+      let retries = 3, delay = 700, lastErr;
+      while (retries > 0) {
+        try {
+          const r = await fetch(ttsUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!r.ok) throw new Error('TTS ' + r.status);
+          const data = await r.json();
+          const part = data.candidates?.[0]?.content?.parts?.[0];
+          const audio = part?.inlineData?.data;
+          if (!audio) throw new Error('No audio');
+          // 回傳 base64 PCM 與取樣率（前端組 WAV）
+          return res.status(200).json({ ok: true, audio, mimeType: part.inlineData.mimeType || 'audio/L16;rate=24000' });
+        } catch (err) {
+          lastErr = err; retries--;
+          if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
+        }
+      }
+      return res.status(502).json({ ok: false, error: 'TTS failed: ' + String(lastErr) });
+    }
+
     // ---------- 新聞模式：抓 NHK RSS，解析成 JSON ----------
     if (mode === 'news') {
       const NHK_RSS = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
