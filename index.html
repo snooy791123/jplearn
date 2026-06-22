@@ -38,6 +38,8 @@
   .lm-btn:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
   .lm-hide-scroll::-webkit-scrollbar{display:none;} .lm-hide-scroll{-ms-overflow-style:none; scrollbar-width:none;}
   @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes lm-blink { 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
+  .lm-dot { width:7px; height:7px; border-radius:50%; background:var(--ink-soft); display:inline-block; animation:lm-blink 1.2s infinite; }
   @media (prefers-reduced-motion:reduce){ *{animation-duration:.001ms!important; transition-duration:.001ms!important;} }
 </style>
 </head>
@@ -51,7 +53,7 @@ const { useState, useEffect } = React;
 const API_ENDPOINT = '/api/generate';
 
 // ⚠️ 部署 Apps Script 後拿到的 Web App 網址貼這裡（留空則只用本機快取，不同步雲端）
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbyI5uUnclfX1JTJLid1PUNPCDSQBgPGPqq0wGQ2dMCXxdqCAXZJw3QL7C0cnZJNnOG81Q/exec';
+const SHEET_API_URL = '';
 
 const CACHE_PREFIX = 'linguamode:vocab:';
 const CACHE_MIN = 5;
@@ -63,6 +65,16 @@ const CATEGORIES = [
   { id: 'N2', title: '職場', lang: 'ja-JP', depth: 3 },
   { id: 'N1', title: '進階', lang: 'ja-JP', depth: 4 },
   { id: 'TOEIC', title: '商用英文', lang: 'en-US', depth: 5 }
+];
+
+// 對話練習情境
+const CHAT_SCENES = [
+  { id: 'cafe', icon: '☕', title: '咖啡廳點餐', role: '咖啡廳店員', lang: 'ja-JP', opener: 'いらっしゃいませ！ご注文はお決まりですか？' },
+  { id: 'direction', icon: '🗺️', title: '問路', role: '路上的日本人', lang: 'ja-JP', opener: 'はい、どうしましたか？道に迷いましたか？' },
+  { id: 'shopping', icon: '🛍️', title: '買衣服', role: '服飾店店員', lang: 'ja-JP', opener: 'いらっしゃいませ。何かお探しですか？' },
+  { id: 'interview', icon: '💼', title: '面試', role: '公司面試官', lang: 'ja-JP', opener: '本日はお越しいただきありがとうございます。まず自己紹介をお願いします。' },
+  { id: 'friend', icon: '🗨️', title: '朋友閒聊', role: '日本朋友', lang: 'ja-JP', opener: 'ひさしぶり！元気だった？最近どう？' },
+  { id: 'biz-en', icon: '🤝', title: 'Business English', role: 'a business client', lang: 'en-US', opener: 'Hi! Thanks for meeting me today. Shall we get started?' }
 ];
 
 const INK = '#2E3A66';
@@ -163,8 +175,17 @@ function App() {
   const [isStoryLoading, setIsStoryLoading] = useState(false);
   const [storyError, setStoryError] = useState('');
   const [speakingId, setSpeakingId] = useState(null);
+  const [voiceWarn, setVoiceWarn] = useState('');
   const [cloudState, setCloudState] = useState(SHEET_API_URL ? 'syncing' : 'off');
   const [cacheCounts, setCacheCounts] = useState({});
+
+  // 對話練習 state
+  const [activeScene, setActiveScene] = useState(null);
+  const [messages, setMessages] = useState([]); // {role:'user'|'model', text, reading, translation, correction}
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [showCorrection, setShowCorrection] = useState(true);
+  const [showTranslation, setShowTranslation] = useState(true);
 
   useEffect(() => {
     let mounted = true;
@@ -243,12 +264,46 @@ function App() {
     setActiveCategory(c); loadVocab(c);
   };
 
+  // 從裝置語音清單挑出符合語言的語音；挑不到回 null
+  const pickVoice = (lang) => {
+    const voices = window.speechSynthesis.getVoices() || [];
+    const want = lang.toLowerCase().split('-')[0]; // 'ja' or 'en'
+    // 優先完全符合 ja-JP，其次任何 ja 開頭
+    return voices.find(v => v.lang && v.lang.toLowerCase() === lang.toLowerCase())
+        || voices.find(v => v.lang && v.lang.toLowerCase().startsWith(want))
+        || null;
+  };
+
   const speak = (text, lang, id) => {
     if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel(); setSpeakingId(id);
-    const u = new SpeechSynthesisUtterance(text); u.lang = lang; u.rate = 0.85;
-    u.onend = () => setSpeakingId(null); u.onerror = () => setSpeakingId(null);
-    window.speechSynthesis.speak(u);
+    window.speechSynthesis.cancel();
+
+    const doSpeak = () => {
+      const voice = pickVoice(lang);
+      if (!voice) {
+        // 裝置沒有該語言的語音，不要用預設（中文）硬念，改提示
+        const name = lang === 'ja-JP' ? '日文' : '英文';
+        setVoiceWarn('你的裝置沒有安裝' + name + '語音，無法正確發音。請到系統設定安裝' + name + '語音包後再試。');
+        setTimeout(() => setVoiceWarn(''), 6000);
+        return;
+      }
+      setSpeakingId(id);
+      const u = new SpeechSynthesisUtterance(text);
+      u.voice = voice; u.lang = voice.lang; u.rate = 0.85;
+      u.onend = () => setSpeakingId(null);
+      u.onerror = () => setSpeakingId(null);
+      window.speechSynthesis.speak(u);
+    };
+
+    // 有些瀏覽器第一次 getVoices() 是空的，要等 voiceschanged
+    if ((window.speechSynthesis.getVoices() || []).length === 0) {
+      window.speechSynthesis.onvoiceschanged = () => { doSpeak(); window.speechSynthesis.onvoiceschanged = null; };
+      // 觸發載入
+      window.speechSynthesis.getVoices();
+      setTimeout(doSpeak, 250); // 保險
+    } else {
+      doSpeak();
+    }
   };
 
   const goTo = (delta) => {
@@ -277,6 +332,66 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [activeCategory, isLoading, showStoryView, currentIndex, vocabList.length]);
 
+  // 開始一段對話
+  const startScene = (scene) => {
+    setActiveScene(scene);
+    setMessages([{ role: 'model', text: scene.opener, reading: '', translation: '', correction: '' }]);
+    setChatInput('');
+  };
+
+  const closeScene = () => {
+    setActiveScene(null); setMessages([]); setChatInput('');
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  };
+
+  const sendChat = async () => {
+    const text = chatInput.trim();
+    if (!text || chatLoading) return;
+    const userMsg = { role: 'user', text };
+    const nextMsgs = [...messages, userMsg];
+    setMessages(nextMsgs);
+    setChatInput('');
+    setChatLoading(true);
+
+    const isJa = activeScene.lang === 'ja-JP';
+    const langName = isJa ? '日文' : '英文';
+    const readingHint = isJa ? '平假名與羅馬拼音' : 'KK 音標';
+    const systemPrompt = `你正在扮演「${activeScene.role}」，情境是「${activeScene.title}」，與一位正在學${langName}的學習者對話。
+規則：
+1. reply 欄：用${langName}自然地回應，維持角色身分，句子難度適中、簡短，推進對話。
+2. replyReading 欄：reply 的${readingHint}。
+3. replyTranslation 欄：reply 的繁體中文翻譯。
+4. correction 欄：檢查使用者「最後一句」的${langName}。若有文法、用詞、不自然之處，用繁體中文簡短指出並給更道地的說法；若完全正確或無從糾正，回空字串。語氣像親切的家教。`;
+
+    // 只送純文字歷史給後端
+    const history = nextMsgs.map((m) => ({ role: m.role, text: m.text }));
+
+    try {
+      const r = await fetch(API_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'chat', systemPrompt, history })
+      });
+      if (!r.ok) throw new Error('backend');
+      const data = await r.json();
+      if (!data.ok || !data.text) throw new Error('empty');
+      const parsed = JSON.parse(data.text);
+      setMessages((prev) => {
+        const copy = [...prev];
+        // 把糾錯掛到剛剛那則 user 訊息上
+        for (let i = copy.length - 1; i >= 0; i--) {
+          if (copy[i].role === 'user') { copy[i] = { ...copy[i], correction: parsed.correction || '' }; break; }
+        }
+        copy.push({ role: 'model', text: parsed.reply, reading: parsed.replyReading || '', translation: parsed.replyTranslation || '', correction: '' });
+        return copy;
+      });
+    } catch {
+      setMessages((prev) => [...prev, { role: 'model', text: '（連線出了點問題，請再說一次）', reading: '', translation: '', correction: '', isError: true }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   const card = vocabList[currentIndex];
   const isJaCard = card?.lang === 'ja-JP';
   const totalStored = Object.values(cacheCounts).reduce((a, b) => a + b, 0);
@@ -295,6 +410,13 @@ function App() {
   return (
     <div className="lm-root">
       <div className="lm-paper-texture" />
+      {voiceWarn && (
+        <div style={{ position:'fixed', top:16, left:'50%', transform:'translateX(-50%)', zIndex:200, maxWidth:'90%',
+          background:'var(--ink)', color:'var(--paper)', padding:'12px 18px', borderRadius:8, fontSize:13, lineHeight:1.5,
+          boxShadow:'0 10px 30px rgba(0,0,0,.25)' }} className="lm-rise">
+          🔊 {voiceWarn}
+        </div>
+      )}
       <header style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'flex-end', padding:'clamp(20px,4vw,40px) clamp(20px,5vw,56px) 0' }}>
         <div>
           <div className="lm-serif" style={{ fontSize:'clamp(26px,5vw,40px)', fontWeight:500, letterSpacing:'-.02em', lineHeight:1 }}>
@@ -357,6 +479,28 @@ function App() {
               style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'12px 22px', borderRadius:2, fontSize:13, letterSpacing:'.05em', flexShrink:0, opacity: customTopic.trim() ? 1 : 0.35 }}>
               <IcSparkles size={15} /> 生成
             </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop:'clamp(36px,5vw,52px)' }}>
+          <div style={{ display:'flex', alignItems:'baseline', gap:12, marginBottom:18 }}>
+            <span className="lm-serif" style={{ fontSize:'clamp(20px,3vw,26px)', fontWeight:500 }}>對話練習</span>
+            <span style={{ fontSize:12, letterSpacing:'.15em', color:'var(--ink-soft)' }}>跟 AI 角色實戰，即時糾錯</span>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))', gap:10 }}>
+            {CHAT_SCENES.map((sc) => (
+              <button key={sc.id} className="lm-btn"
+                onClick={() => startScene(sc)}
+                style={{ display:'flex', alignItems:'center', gap:12, padding:'16px 16px', border:'1px solid var(--rule)', borderRadius:4, background:'var(--paper-2)', textAlign:'left', transition:'all .2s' }}
+                onMouseEnter={(e)=>{ e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateY(-2px)'; }}
+                onMouseLeave={(e)=>{ e.currentTarget.style.borderColor='var(--rule)'; e.currentTarget.style.transform='none'; }}>
+                <span style={{ fontSize:24, flexShrink:0 }}>{sc.icon}</span>
+                <span style={{ display:'flex', flexDirection:'column', gap:2, minWidth:0 }}>
+                  <span className="lm-jp-serif" style={{ fontSize:15, fontWeight:500, color:'var(--ink)' }}>{sc.title}</span>
+                  <span style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)', textTransform:'uppercase' }}>{sc.lang === 'ja-JP' ? '日本語' : 'English'}</span>
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       </main>
@@ -477,6 +621,91 @@ function App() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 對話練習介面 */}
+      {activeScene && (
+        <div style={{ position:'fixed', inset:0, zIndex:60, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
+          <div className="lm-paper-texture" />
+
+          {/* 頂列 */}
+          <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(16px,3vw,24px) clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
+              <span style={{ fontSize:26, flexShrink:0 }}>{activeScene.icon}</span>
+              <div style={{ minWidth:0 }}>
+                <div className="lm-jp-serif" style={{ fontSize:'clamp(16px,2.5vw,20px)', fontWeight:500 }}>{activeScene.title}</div>
+                <div style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)' }}>對方：{activeScene.role}</div>
+              </div>
+            </div>
+            <button onClick={closeScene} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
+          </div>
+
+          {/* 開關列 */}
+          <div style={{ position:'relative', zIndex:10, display:'flex', gap:8, padding:'10px clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0, flexWrap:'wrap' }}>
+            <button onClick={() => setShowCorrection(s => !s)} className="lm-btn"
+              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showCorrection ? 'var(--accent)' : 'var(--rule)'), color: showCorrection ? 'var(--accent)' : 'var(--ink-soft)', background: showCorrection ? 'rgba(46,58,102,.06)' : 'transparent' }}>
+              ✎ 糾錯 {showCorrection ? '開' : '關'}
+            </button>
+            <button onClick={() => setShowTranslation(s => !s)} className="lm-btn"
+              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showTranslation ? 'var(--accent)' : 'var(--rule)'), color: showTranslation ? 'var(--accent)' : 'var(--ink-soft)', background: showTranslation ? 'rgba(46,58,102,.06)' : 'transparent' }}>
+              中 翻譯 {showTranslation ? '開' : '關'}
+            </button>
+          </div>
+
+          {/* 對話區 */}
+          <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', padding:'clamp(16px,4vw,32px) clamp(18px,5vw,40px)', display:'flex', flexDirection:'column', gap:18 }}>
+            {messages.map((m, i) => (
+              m.role === 'model' ? (
+                <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-start' }} className="lm-rise">
+                  <div style={{ fontSize:10, letterSpacing:'.15em', textTransform:'uppercase', color:'var(--ink-soft)', marginBottom:5 }}>{activeScene.role}</div>
+                  <div style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:'3px 16px 16px 16px', padding:'14px 18px' }}>
+                    <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                      <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(16px,3vw,19px)', lineHeight:1.6, margin:0, flex:1, color: m.isError ? '#A35' : 'var(--ink)' }}>{m.text}</p>
+                      {!m.isError && (
+                        <button onClick={() => speak(m.text, activeScene.lang, 'chat-'+i)} className="lm-btn" aria-label="播放"
+                          style={{ flexShrink:0, width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={13} /></button>
+                      )}
+                    </div>
+                    {m.reading && <p style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', margin:'8px 0 0' }}>{m.reading}</p>}
+                    {showTranslation && m.translation && <p className="lm-serif" style={{ fontSize:14, color:'var(--ink-soft)', margin:'6px 0 0' }}>{m.translation}</p>}
+                  </div>
+                </div>
+              ) : (
+                <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-end' }} className="lm-rise">
+                  <div style={{ background:'var(--ink)', borderRadius:'16px 3px 16px 16px', padding:'12px 16px' }}>
+                    <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)' }}>{m.text}</p>
+                  </div>
+                  {showCorrection && m.correction && (
+                    <div style={{ marginTop:6, background:'rgba(46,58,102,.06)', border:'1px solid var(--accent-soft)', borderRadius:10, padding:'10px 14px' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--accent)', fontWeight:600, marginBottom:4 }}>✎ 小老師</div>
+                      <p style={{ fontSize:13, lineHeight:1.6, margin:0, color:'var(--ink)' }}>{m.correction}</p>
+                    </div>
+                  )}
+                </div>
+              )
+            ))}
+            {chatLoading && (
+              <div style={{ alignSelf:'flex-start', display:'flex', gap:5, padding:'10px 4px' }}>
+                <span className="lm-dot" style={{ animationDelay:'0s' }} />
+                <span className="lm-dot" style={{ animationDelay:'.2s' }} />
+                <span className="lm-dot" style={{ animationDelay:'.4s' }} />
+              </div>
+            )}
+          </div>
+
+          {/* 輸入列 */}
+          <div style={{ position:'relative', zIndex:10, display:'flex', gap:10, alignItems:'flex-end', padding:'clamp(12px,3vw,20px) clamp(18px,5vw,40px)', borderTop:'1px solid var(--rule)', flexShrink:0 }}>
+            <textarea value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
+              placeholder={activeScene.lang === 'ja-JP' ? '用日文回覆…（Enter 送出）' : 'Reply in English… (Enter to send)'}
+              rows={1} className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'}
+              style={{ flex:1, resize:'none', maxHeight:120, background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:18, padding:'12px 16px', fontSize:16, color:'var(--ink)', outline:'none', lineHeight:1.5, fontFamily:'inherit' }} />
+            <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading} className="lm-btn"
+              style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center', opacity: (!chatInput.trim()||chatLoading) ? 0.4 : 1 }} aria-label="送出">
+              <IcRight size={20} />
+            </button>
+          </div>
         </div>
       )}
     </div>
