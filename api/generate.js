@@ -1,1346 +1,175 @@
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
-<meta name="theme-color" content="#F7F4ED" />
-<meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
-<title>LinguaMode・字卡</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,400&family=Inter:wght@400;500;600&family=Noto+Serif+JP:wght@400;600&family=Noto+Sans+JP:wght@400;500&display=swap" rel="stylesheet" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js" crossorigin></script>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  html, body, #root { height: 100%; }
-  body { background: #F7F4ED; }
-  :root {
-    --paper:#F7F4ED; --paper-2:#F0EBDF; --ink:#1A1A17; --ink-soft:#6B675C;
-    --rule:#D9D2C2; --accent:#2E3A66; --accent-soft:#5A6694;
+// Vercel Serverless Function：在伺服器端代打 Gemini，API key 藏在環境變數
+// 前端只會打 /api/generate，永遠看不到 key
+//
+// 部署前要在 Vercel 專案設定 → Environment Variables 加：
+//   GEMINI_API_KEY = 你的新金鑰
+//
+// 支援兩種模式：
+//   1. 單字/故事生成（mode 省略或 'json'）：帶 promptText + responseSchema，回傳結構化 JSON
+//   2. 對話練習（mode 'chat'）：帶 systemPrompt + history，回傳對話 JSON（角色回覆 + 糾錯）
+
+const GEMINI_MODEL = 'gemini-3.5-flash';
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
-  .lm-root { position:relative; width:100%; min-height:100dvh; background:var(--paper); color:var(--ink);
-    font-family:'Inter','Noto Sans JP',sans-serif; overflow-x:hidden; -webkit-font-smoothing:antialiased; }
-  .lm-serif { font-family:'Newsreader',serif; }
-  .lm-jp-serif { font-family:'Noto Serif JP',serif; }
-  .lm-paper-texture { position:absolute; inset:0; pointer-events:none; opacity:.4; mix-blend-mode:multiply;
-    background-image:radial-gradient(circle at 1px 1px, rgba(120,110,90,.06) 1px, transparent 0); background-size:4px 4px; }
-  @keyframes lm-rise { from{opacity:0; transform:translateY(12px);} to{opacity:1; transform:translateY(0);} }
-  .lm-rise { animation:lm-rise .5s cubic-bezier(.2,.8,.2,1) both; }
-  .lm-flip-wrap { perspective:1600px; }
-  .lm-flip { position:relative; transform-style:preserve-3d; transition:transform .6s cubic-bezier(.2,.7,.2,1); }
-  .lm-flip.is-flipped { transform:rotateY(180deg); }
-  .lm-face { position:absolute; inset:0; backface-visibility:hidden; -webkit-backface-visibility:hidden; display:flex; flex-direction:column; }
-  .lm-face.back { transform:rotateY(180deg); }
-  .lm-btn { font-family:'Inter',sans-serif; cursor:pointer; transition:all .2s ease; border:none; background:none; }
-  .lm-btn:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
-  .lm-hide-scroll::-webkit-scrollbar{display:none;} .lm-hide-scroll{-ms-overflow-style:none; scrollbar-width:none;}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  @keyframes lm-blink { 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
-  .lm-dot { width:7px; height:7px; border-radius:50%; background:var(--ink-soft); display:inline-block; animation:lm-blink 1.2s infinite; }
-  @keyframes lm-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(46,58,102,.4);} 50%{box-shadow:0 0 0 8px rgba(46,58,102,0);} }
-  /* 手機優化 */
-  .lm-btn { min-height:44px; min-width:44px; touch-action:manipulation; } /* 觸控目標至少 44px、消除點擊延遲 */
-  .lm-safe-bottom { padding-bottom:max(env(safe-area-inset-bottom), 16px); } /* 避開 iPhone home 手勢條 */
-  .lm-flip-wrap { touch-action:pan-y; } /* 允許垂直捲動，水平交給滑動手勢 */
-  @media (hover:hover) { /* 只有真的有滑鼠時才啟用 hover 效果 */
-    .lm-hoverable:hover { opacity:.85; }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Server missing GEMINI_API_KEY' });
   }
-  @media (prefers-reduced-motion:reduce){ *{animation-duration:.001ms!important; transition-duration:.001ms!important;} }
-</style>
-</head>
-<body>
-<div id="root"></div>
 
-<script type="text/babel" data-presets="react,env">
-const { useState, useEffect } = React;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-// 後端代理端點：key 藏在 Vercel，前端只打這個
-const API_ENDPOINT = '/api/generate';
-
-// ⚠️ 部署 Apps Script 後拿到的 Web App 網址貼這裡（留空則只用本機快取，不同步雲端）
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbyI5uUnclfX1JTJLid1PUNPCDSQBgPGPqq0wGQ2dMCXxdqCAXZJw3QL7C0cnZJNnOG81Q/exec';
-
-const CACHE_PREFIX = 'linguamode:vocab:';
-const CACHE_MIN = 5;
-
-const CATEGORIES = [
-  { id: 'N5', title: '入門', lang: 'ja-JP', depth: 0 },
-  { id: 'N4', title: '基礎', lang: 'ja-JP', depth: 1 },
-  { id: 'N3', title: '中級', lang: 'ja-JP', depth: 2 },
-  { id: 'N2', title: '職場', lang: 'ja-JP', depth: 3 },
-  { id: 'N1', title: '進階', lang: 'ja-JP', depth: 4 },
-  { id: 'TOEIC', title: '商用英文', lang: 'en-US', depth: 5 }
-];
-
-// 對話練習情境
-const CHAT_SCENES = [
-  { id: 'cafe', icon: '☕', title: '咖啡廳點餐', role: '咖啡廳店員', lang: 'ja-JP', opener: 'いらっしゃいませ！ご注文はお決まりですか？' },
-  { id: 'direction', icon: '🗺️', title: '問路', role: '路上的日本人', lang: 'ja-JP', opener: 'はい、どうしましたか？道に迷いましたか？' },
-  { id: 'shopping', icon: '🛍️', title: '買衣服', role: '服飾店店員', lang: 'ja-JP', opener: 'いらっしゃいませ。何かお探しですか？' },
-  { id: 'interview', icon: '💼', title: '面試', role: '公司面試官', lang: 'ja-JP', opener: '本日はお越しいただきありがとうございます。まず自己紹介をお願いします。' },
-  { id: 'friend', icon: '🗨️', title: '朋友閒聊', role: '日本朋友', lang: 'ja-JP', opener: 'ひさしぶり！元気だった？最近どう？' },
-  { id: 'biz-en', icon: '🤝', title: 'Business English', role: 'a business client', lang: 'en-US', opener: 'Hi! Thanks for meeting me today. Shall we get started?' }
-];
-
-const INK = '#2E3A66';
-const depthColor = (d) => (['#8A93B8','#6B76A6','#525E95','#3E4A82','#2E3A66','#3A4A7A'][d] ?? INK);
-
-// ---------- 內聯 SVG 圖示（取代 lucide-react） ----------
-const Icon = ({ d, size = 20, fill = 'none', style }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style} aria-hidden="true">
-    {d}
-  </svg>
-);
-const IcX = (p) => <Icon {...p} d={<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>} />;
-const IcVolume = (p) => <Icon {...p} d={<><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></>} />;
-const IcLeft = (p) => <Icon {...p} d={<polyline points="15 18 9 12 15 6"/>} />;
-const IcRight = (p) => <Icon {...p} d={<polyline points="9 18 15 12 9 6"/>} />;
-const IcSparkles = (p) => <Icon {...p} d={<path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/>} />;
-const IcBook = (p) => <Icon {...p} d={<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>} />;
-const IcRefresh = (p) => <Icon {...p} d={<><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></>} />;
-const IcArrowLeft = (p) => <Icon {...p} d={<><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></>} />;
-const IcDatabase = (p) => <Icon {...p} d={<><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></>} />;
-const IcCloud = (p) => <Icon {...p} d={<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>} />;
-const IcCloudOff = (p) => <Icon {...p} d={<><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/></>} />;
-const IcMic = (p) => <Icon {...p} d={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></>} />;
-const IcBrain = (p) => <Icon {...p} d={<path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2zm5 0A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/>} />;
-
-// ---------- SRS 間隔複習核心（SM-2 簡化版） ----------
-const DAY = 86400000;
-const todayStr = () => new Date().toISOString();
-// 給單字補上 SRS 預設欄位
-const withSrs = (item) => ({
-  reps: 0, interval: 0, ease: 2.5, due: todayStr(),
-  ...item
-});
-// 依評價算下次複習。grade: 0=忘了 1=模糊 2=記得
-const scheduleNext = (card, grade) => {
-  let { reps = 0, interval = 0, ease = 2.5 } = card;
-  if (grade === 0) {            // 忘了：重來，明天再考
-    reps = 0; interval = 1; ease = Math.max(1.3, ease - 0.2);
-  } else if (grade === 1) {     // 模糊：小幅前進
-    reps += 1; ease = Math.max(1.3, ease - 0.05);
-    interval = interval < 1 ? 1 : Math.max(1, Math.round(interval * 1.2));
-  } else {                       // 記得：正常拉長
-    reps += 1; ease = ease + 0.1;
-    if (reps === 1) interval = 1;
-    else if (reps === 2) interval = 3;
-    else interval = Math.round(interval * ease);
-  }
-  const due = new Date(Date.now() + interval * DAY).toISOString();
-  return { reps, interval, ease, due };
-};
-
-// ---------- 本機快取 ----------
-const cacheKey = (cat) => `${CACHE_PREFIX}${cat.id}:${cat.title}`;
-const readCache = (cat) => { try { const r = localStorage.getItem(cacheKey(cat)); return r ? JSON.parse(r) : []; } catch { return []; } };
-const writeCache = (cat, items) => {
-  try {
-    const ex = readCache(cat); const seen = new Set(ex.map(v => v.word));
-    const merged = [...ex, ...items.filter(v => !seen.has(v.word)).map(withSrs)];
-    localStorage.setItem(cacheKey(cat), JSON.stringify(merged)); return merged;
-  } catch { return items; }
-};
-const sampleFromCache = (cat, n) => {
-  const all = readCache(cat);
-  if (all.length < CACHE_MIN) return null;
-  return [...all].sort(() => Math.random() - 0.5).slice(0, n);
-};
-
-// 列出全字庫今天到期該複習的字（跨所有分類）
-const getDueCards = () => {
-  const now = Date.now();
-  const due = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key || !key.startsWith(CACHE_PREFIX)) continue;
-    try {
-      const arr = JSON.parse(localStorage.getItem(key) || '[]');
-      arr.forEach((c) => {
-        const d = c.due ? new Date(c.due).getTime() : now;
-        if (d <= now) due.push({ ...c, _key: key });
-      });
-    } catch {}
-  }
-  return due.sort((a, b) => new Date(a.due || 0) - new Date(b.due || 0));
-};
-
-// 更新某個字的 SRS 進度，寫回它所在的 localStorage key
-const updateCardSrs = (card, srs) => {
-  try {
-    const arr = JSON.parse(localStorage.getItem(card._key) || '[]');
-    const idx = arr.findIndex((c) => c.id === card.id || c.word === card.word);
-    if (idx >= 0) { arr[idx] = { ...arr[idx], ...srs }; localStorage.setItem(card._key, JSON.stringify(arr)); }
-  } catch {}
-};
-
-// ---------- 雲端同步 ----------
-const pushToSheet = (cat, items) => {
-  if (!SHEET_API_URL) return Promise.resolve(false);
-  return fetch(SHEET_API_URL, {
-    method: 'POST', mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'add', items: items.map(v => ({ ...v, category: cat.id })) })
-  }).then(() => true).catch(() => false);
-};
-// 把複習進度更新同步到試算表
-const pushSrsToSheet = (updates) => {
-  if (!SHEET_API_URL || !updates.length) return Promise.resolve(false);
-  return fetch(SHEET_API_URL, {
-    method: 'POST', mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'updateSrs', updates })
-  }).then(() => true).catch(() => false);
-};
-const pullFromSheet = async () => {
-  if (!SHEET_API_URL) return 0;
-  try {
-    const r = await fetch(SHEET_API_URL); const data = await r.json();
-    if (!data.ok || !Array.isArray(data.data)) return 0;
-    const byCat = {};
-    data.data.forEach(row => {
-      const cat = CATEGORIES.find(c => c.id === row.category) || { id: row.category, title: row.category };
-      const k = cacheKey(cat); (byCat[k] = byCat[k] || []).push(row);
-    });
-    let total = 0;
-    Object.keys(byCat).forEach(k => {
+  // 共用的帶重試送出
+  async function callGemini(payload) {
+    let retries = 3, delay = 800, lastErr;
+    while (retries > 0) {
       try {
-        const ex = JSON.parse(localStorage.getItem(k) || '[]');
-        const exMap = {}; ex.forEach(v => { exMap[v.word] = v; });
-        byCat[k].forEach(row => {
-          // 正規化 SRS 欄位型別
-          const srs = {
-            reps: Number(row.reps) || 0,
-            interval: Number(row.interval) || 0,
-            ease: Number(row.ease) || 2.5,
-            due: row.due || todayStr()
-          };
-          if (exMap[row.word]) {
-            // 已存在 → 用雲端的 SRS 進度覆蓋（雲端視為較新）
-            Object.assign(exMap[row.word], srs);
-          } else {
-            // 新字 → 整筆加入
-            const item = withSrs({ ...row, ...srs });
-            ex.push(item); exMap[row.word] = item;
-          }
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
-        localStorage.setItem(k, JSON.stringify(ex)); total += byCat[k].length;
-      } catch {}
-    });
-    return total;
-  } catch { return 0; }
-};
-
-// ---------- 呼叫後端代理 ----------
-const callBackend = async (promptText, responseSchema) => {
-  const r = await fetch(API_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ promptText, responseSchema })
-  });
-  if (!r.ok) throw new Error(`Backend error: ${r.status}`);
-  const data = await r.json();
-  if (!data.ok || !data.text) throw new Error(data.error || 'No text');
-  return JSON.parse(data.text);
-};
-
-function App() {
-  const [activeCategory, setActiveCategory] = useState(null);
-  const [customTopic, setCustomTopic] = useState('');
-  const [customLang, setCustomLang] = useState('ja-JP');
-  const [vocabList, setVocabList] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [flipped, setFlipped] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [source, setSource] = useState('');
-  const [showStoryView, setShowStoryView] = useState(false);
-  const [storyData, setStoryData] = useState(null);
-  const [isStoryLoading, setIsStoryLoading] = useState(false);
-  const [storyError, setStoryError] = useState('');
-  const [speakingId, setSpeakingId] = useState(null);
-  const [voiceWarn, setVoiceWarn] = useState('');
-  const [hqLoadingId, setHqLoadingId] = useState(null);
-  const hqAudioRef = React.useRef(null);
-  const touchRef = React.useRef({ x: 0, y: 0, t: 0 });
-
-  // 產生左右滑手勢處理器：onLeft 往左滑(下一張)、onRight 往右滑(上一張)、onTap 輕點
-  const makeSwipe = (onLeft, onRight, onTap) => ({
-    onTouchStart: (e) => {
-      const t = e.changedTouches[0];
-      touchRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
-    },
-    onTouchEnd: (e) => {
-      const t = e.changedTouches[0];
-      const dx = t.clientX - touchRef.current.x;
-      const dy = t.clientY - touchRef.current.y;
-      const dt = Date.now() - touchRef.current.t;
-      const absX = Math.abs(dx), absY = Math.abs(dy);
-      // 水平滑動：位移夠大、以橫向為主、不是長按
-      if (absX > 50 && absX > absY * 1.5 && dt < 600) {
-        if (dx < 0) onLeft && onLeft(); else onRight && onRight();
-      } else if (absX < 10 && absY < 10 && onTap) {
-        onTap(); // 視為輕點
+        if (!r.ok) throw new Error(`Gemini error: ${r.status}`);
+        const data = await r.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error('Empty response');
+        return text;
+      } catch (err) {
+        lastErr = err; retries--;
+        if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
       }
     }
-  });
-  const [cloudState, setCloudState] = useState(SHEET_API_URL ? 'syncing' : 'off');
-  const [cacheCounts, setCacheCounts] = useState({});
+    throw lastErr;
+  }
 
-  // SRS 複習 state
-  const [reviewMode, setReviewMode] = useState(false);
-  const [reviewQueue, setReviewQueue] = useState([]);
-  const [reviewIndex, setReviewIndex] = useState(0);
-  const [reviewFlipped, setReviewFlipped] = useState(false);
-  const [reviewDone, setReviewDone] = useState(0);
-  const [dueCount, setDueCount] = useState(0);
-  const srsPendingRef = React.useRef([]); // 累積要同步雲端的進度
+  try {
+    const body = req.body || {};
+    const mode = body.mode || 'json';
 
-  // 對話練習 state
-  const [activeScene, setActiveScene] = useState(null);
-  const [messages, setMessages] = useState([]); // {role:'user'|'model', text, reading, translation, correction}
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
-  const [showCorrection, setShowCorrection] = useState(true);
-  const [showTranslation, setShowTranslation] = useState(true);
-  const [isListening, setIsListening] = useState(false);
-  const recognitionRef = React.useRef(null);
-
-  // 新聞 state
-  const [showNews, setShowNews] = useState(false);
-  const [newsItems, setNewsItems] = useState([]);
-  const [newsLoading, setNewsLoading] = useState(false);
-  const [newsError, setNewsError] = useState('');
-  const [newsLevel, setNewsLevel] = useState('easy'); // 'easy' | 'normal'
-  const [activeArticle, setActiveArticle] = useState(null); // 點開的那則（含 AI 加工）
-  const [articleLoading, setArticleLoading] = useState(false);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      if (SHEET_API_URL) { const n = await pullFromSheet(); if (mounted) setCloudState(n >= 0 ? 'ok' : 'error'); }
-      if (mounted) refreshCounts();
-    })();
-    return () => { mounted = false; if (window.speechSynthesis) window.speechSynthesis.cancel(); };
-  }, []);
-
-  const refreshCounts = () => {
-    const c = {}; CATEGORIES.forEach(cat => { c[cat.id] = readCache(cat).length; }); setCacheCounts(c);
-    setDueCount(getDueCards().length);
-  };
-
-  // 開始今日複習
-  const startReview = () => {
-    const due = getDueCards();
-    if (due.length === 0) return;
-    setReviewQueue(due);
-    setReviewIndex(0); setReviewFlipped(false); setReviewDone(0);
-    srsPendingRef.current = [];
-    setReviewMode(true);
-  };
-
-  // 評價當前複習卡。grade: 0忘了 1模糊 2記得
-  const gradeCard = (grade) => {
-    const card = reviewQueue[reviewIndex];
-    if (!card) return;
-    const srs = scheduleNext(card, grade);
-    updateCardSrs(card, srs);                       // 寫回本機
-    srsPendingRef.current.push({ id: card.id, ...srs }); // 累積待同步
-
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    const next = reviewIndex + 1;
-    setReviewDone(d => d + 1);
-    if (next >= reviewQueue.length) {
-      // 複習結束：一次把進度同步到雲端
-      if (SHEET_API_URL && srsPendingRef.current.length) pushSrsToSheet(srsPendingRef.current);
-      refreshCounts();
-      setReviewIndex(next); // 觸發結算畫面
-    } else {
-      setReviewIndex(next); setReviewFlipped(false);
-    }
-  };
-
-  const closeReview = () => {
-    if (SHEET_API_URL && srsPendingRef.current.length) pushSrsToSheet(srsPendingRef.current);
-    srsPendingRef.current = [];
-    setReviewMode(false); setReviewQueue([]); setReviewIndex(0); setReviewFlipped(false);
-    refreshCounts();
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-  };
-
-  const loadVocab = async (category, forceAI = false) => {
-    setIsLoading(true); setErrorMsg(''); setShowStoryView(false);
-    setStoryData(null); setStoryError(''); setFlipped(false);
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-
-    if (!forceAI) {
-      const cached = sampleFromCache(category, 5);
-      if (cached) { setVocabList(cached); setCurrentIndex(0); setFlipped(false); setSource('cache'); setIsLoading(false); return; }
-    }
-
-    const isJa = category.lang === 'ja-JP';
-    const langName = isJa ? '日文' : '英文';
-    const readingHint = isJa ? 'reading 欄請提供平假名加羅馬拼音' : 'reading 欄請提供詞性加 KK 音標';
-    const scope = category.id === '自訂' ? `情境「${category.title}」` : `【${category.id}（${category.title}）】程度`;
-    const known = readCache(category).map(v => v.word).slice(-40);
-    const avoid = known.length ? `\n請避免生成以下已學過的單字：${known.join('、')}。` : '';
-    const promptText = `請隨機生成 5 個不重複的 ${scope} ${langName}實用單字。\n${readingHint}。\n每個單字都要附一句實用的商業或生活例句。${avoid}`;
-
-    const responseSchema = {
-      type: 'ARRAY',
-      items: { type: 'OBJECT', properties: {
-        word: { type: 'STRING' }, reading: { type: 'STRING' }, translation: { type: 'STRING' },
-        sentence: { type: 'STRING' }, sentenceReading: { type: 'STRING' }, sentenceTranslation: { type: 'STRING' }
-      }, required: ['word','reading','translation','sentence','sentenceTranslation'] }
-    };
-
-    try {
-      const parsed = await callBackend(promptText, responseSchema);
-      if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('Invalid');
-      const fresh = parsed.map((item, i) => ({ ...item, lang: category.lang, id: `${Date.now()}-${i}` }));
-      setVocabList(fresh); setCurrentIndex(0); setFlipped(false); setSource('ai');
-      writeCache(category, fresh); refreshCounts();
-      if (SHEET_API_URL) { setCloudState('syncing'); pushToSheet(category, fresh).then(ok => setCloudState(ok ? 'ok' : 'error')); }
-    } catch {
-      setErrorMsg('生成單字時發生問題，請按「換一批」再試一次。'); setVocabList([]);
-    } finally { setIsLoading(false); }
-  };
-
-  const generateStoryFromAI = async () => {
-    setIsStoryLoading(true); setShowStoryView(true); setStoryError(''); setStoryData(null);
-    const words = vocabList.map(v => v.word).join('、');
-    const isJa = activeCategory.lang === 'ja-JP';
-    const langName = isJa ? '日文' : '英文';
-    const readingHint = isJa ? '平假名與羅馬拼音' : 'KK 音標';
-    const promptText = `請用以下單字寫一篇 3 到 4 句的極短篇故事或對話，幫助學習者透過上下文記住它們：\n單字：${words}\n語言：${langName}\n故事要通順、自然、有趣，且每個單字都要用到。`;
-    const responseSchema = {
-      type: 'OBJECT',
-      properties: { story: { type: 'STRING' }, reading: { type: 'STRING', description: readingHint }, translation: { type: 'STRING', description: '繁體中文翻譯' } },
-      required: ['story','reading','translation']
-    };
-    try {
-      const parsed = await callBackend(promptText, responseSchema);
-      if (!parsed.story) throw new Error('Invalid');
-      setStoryData(parsed);
-    } catch { setStoryError('撰寫故事時發生問題，請返回單字後再試一次。'); }
-    finally { setIsStoryLoading(false); }
-  };
-
-  const handleCustomGenerate = () => {
-    if (!customTopic.trim()) return;
-    const c = { id: '自訂', title: customTopic.trim(), lang: customLang, depth: 4 };
-    setActiveCategory(c); loadVocab(c);
-  };
-
-  // 從裝置語音清單挑出符合語言的語音；挑不到回 null
-  // 把 base64 PCM(L16) 組成 WAV，回傳可播放的 blob URL
-  const pcmToWavUrl = (base64, sampleRate) => {
-    const bin = atob(base64);
-    const len = bin.length;
-    const pcm = new Uint8Array(len);
-    for (let i = 0; i < len; i++) pcm[i] = bin.charCodeAt(i);
-    const buffer = new ArrayBuffer(44 + len);
-    const view = new DataView(buffer);
-    const wStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-    wStr(0, 'RIFF'); view.setUint32(4, 36 + len, true); wStr(8, 'WAVE');
-    wStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-    wStr(36, 'data'); view.setUint32(40, len, true);
-    new Uint8Array(buffer, 44).set(pcm);
-    return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
-  };
-
-  // 高品質語音（Gemini TTS）
-  const speakHQ = async (text, id) => {
-    if (!text) return;
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    if (hqAudioRef.current) { hqAudioRef.current.pause(); hqAudioRef.current = null; }
-    setHqLoadingId(id); setSpeakingId(null);
-    try {
-      const r = await fetch(API_ENDPOINT, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'tts', text, voice: 'Kore' })
-      });
-      const data = await r.json();
-      if (!data.ok || !data.audio) throw new Error('no audio');
-      // 從 mimeType 取 rate，預設 24000
-      const m = /rate=(\d+)/.exec(data.mimeType || '');
-      const rate = m ? parseInt(m[1], 10) : 24000;
-      const url = pcmToWavUrl(data.audio, rate);
-      const audio = new Audio(url);
-      hqAudioRef.current = audio;
-      setHqLoadingId(null); setSpeakingId(id);
-      audio.onended = () => { setSpeakingId(null); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setSpeakingId(null); };
-      audio.play();
-    } catch {
-      setHqLoadingId(null);
-      setVoiceWarn('高品質語音暫時無法使用（Preview 偶爾不穩），已改用一般發音。');
-      setTimeout(() => setVoiceWarn(''), 4000);
-      // 退回一般發音
-      speak(text, 'ja-JP', id);
-    }
-  };
-
-  const pickVoice = (lang) => {
-    const voices = window.speechSynthesis.getVoices() || [];
-    const want = lang.toLowerCase().split('-')[0]; // 'ja' or 'en'
-    // 優先完全符合 ja-JP，其次任何 ja 開頭
-    return voices.find(v => v.lang && v.lang.toLowerCase() === lang.toLowerCase())
-        || voices.find(v => v.lang && v.lang.toLowerCase().startsWith(want))
-        || null;
-  };
-
-  const speak = (text, lang, id) => {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-
-    const doSpeak = () => {
-      const voice = pickVoice(lang);
-      if (!voice) {
-        // 裝置沒有該語言的語音，不要用預設（中文）硬念，改提示
-        const name = lang === 'ja-JP' ? '日文' : '英文';
-        setVoiceWarn('你的裝置沒有安裝' + name + '語音，無法正確發音。請到系統設定安裝' + name + '語音包後再試。');
-        setTimeout(() => setVoiceWarn(''), 6000);
-        return;
-      }
-      setSpeakingId(id);
-      const u = new SpeechSynthesisUtterance(text);
-      u.voice = voice; u.lang = voice.lang; u.rate = 0.85;
-      u.onend = () => setSpeakingId(null);
-      u.onerror = () => setSpeakingId(null);
-      window.speechSynthesis.speak(u);
-    };
-
-    // 有些瀏覽器第一次 getVoices() 是空的，要等 voiceschanged
-    if ((window.speechSynthesis.getVoices() || []).length === 0) {
-      window.speechSynthesis.onvoiceschanged = () => { doSpeak(); window.speechSynthesis.onvoiceschanged = null; };
-      // 觸發載入
-      window.speechSynthesis.getVoices();
-      setTimeout(doSpeak, 250); // 保險
-    } else {
-      doSpeak();
-    }
-  };
-
-  const goTo = (delta) => {
-    const next = currentIndex + delta;
-    if (next < 0 || next > vocabList.length - 1) return;
-    setCurrentIndex(next); setFlipped(false);
-    if (window.speechSynthesis) window.speechSynthesis.cancel(); setSpeakingId(null);
-  };
-
-  const closeOverlay = () => {
-    setActiveCategory(null); setVocabList([]); setCurrentIndex(0); setErrorMsg('');
-    setShowStoryView(false); setStoryData(null); setStoryError(''); setSpeakingId(null);
-    setFlipped(false); setSource('');
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-  };
-
-  useEffect(() => {
-    if (!activeCategory || isLoading || showStoryView) return;
-    const onKey = (e) => {
-      if (e.key === 'ArrowLeft') goTo(-1);
-      else if (e.key === 'ArrowRight') goTo(1);
-      else if (e.key === ' ') { e.preventDefault(); setFlipped(f => !f); }
-      else if (e.key === 'Escape') closeOverlay();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [activeCategory, isLoading, showStoryView, currentIndex, vocabList.length]);
-
-  // 開始一段對話
-  const startScene = (scene) => {
-    setActiveScene(scene);
-    setMessages([{ role: 'model', text: scene.opener, reading: '', translation: '', correction: '' }]);
-    setChatInput('');
-  };
-
-  const closeScene = () => {
-    setActiveScene(null); setMessages([]); setChatInput('');
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-  };
-
-  // 語音輸入：用講的回話。不支援時回 false（前端會提示退回打字）
-  // 抓 NHK 新聞清單
-  const loadNews = async () => {
-    setShowNews(true); setNewsLoading(true); setNewsError(''); setActiveArticle(null);
-    try {
-      const r = await fetch(API_ENDPOINT, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'news' })
-      });
-      const data = await r.json();
-      if (!data.ok || !Array.isArray(data.items) || data.items.length === 0) throw new Error('empty');
-      setNewsItems(data.items);
-    } catch {
-      setNewsError('抓取新聞時發生問題，請稍後再試。');
-    } finally {
-      setNewsLoading(false);
-    }
-  };
-
-  // 點開一則新聞，讓 Gemini 依難度加讀音/翻譯/難詞
-  const openArticle = async (item) => {
-    setActiveArticle({ ...item, processed: null });
-    setArticleLoading(true);
-
-    const levelInstr = newsLevel === 'easy'
-      ? '請把這則新聞改寫成「やさしい日本語」（簡單日語，初中級程度，短句、常用詞、必要時保留漢字但加假名），放在 simplified 欄。'
-      : '保留原文難度，simplified 欄直接放原文摘要即可。';
-
-    const promptText = `這是一則 NHK 日文新聞：
-標題：${item.title}
-摘要：${item.description || item.title}
-
-${levelInstr}
-另外請提供：
-- reading：simplified 內容的假名讀音（重要詞彙標假名即可，不用整句羅馬拼音）
-- translation：simplified 內容的繁體中文翻譯
-- words：3 到 5 個本則新聞的關鍵單字，每個含 word（日文）、reading（假名）、meaning（繁體中文）`;
-
-    const responseSchema = {
-      type: 'OBJECT',
-      properties: {
-        simplified: { type: 'STRING' },
-        reading: { type: 'STRING' },
-        translation: { type: 'STRING' },
-        words: {
-          type: 'ARRAY',
-          items: { type: 'OBJECT', properties: {
-            word: { type: 'STRING' }, reading: { type: 'STRING' }, meaning: { type: 'STRING' }
-          }, required: ['word', 'meaning'] }
-        }
-      },
-      required: ['simplified', 'translation']
-    };
-
-    try {
-      const r = await fetch(API_ENDPOINT, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ promptText, responseSchema })
-      });
-      const data = await r.json();
-      if (!data.ok || !data.text) throw new Error('empty');
-      const parsed = JSON.parse(data.text);
-      setActiveArticle({ ...item, processed: parsed });
-    } catch {
-      setActiveArticle({ ...item, processed: { error: '處理這則新聞時發生問題，請返回再試一次。' } });
-    } finally {
-      setArticleLoading(false);
-    }
-  };
-
-  // 把新聞裡的單字存進字庫（自訂分類「新聞」）
-  const saveNewsWords = (words) => {
-    if (!words || !words.length) return;
-    const cat = { id: '新聞', title: '日本新聞', lang: 'ja-JP' };
-    const items = words.map((w, i) => ({
-      word: w.word, reading: w.reading || '', translation: w.meaning || '',
-      sentence: '', sentenceReading: '', sentenceTranslation: '',
-      lang: 'ja-JP', id: `news-${Date.now()}-${i}`
-    }));
-    writeCache(cat, items); refreshCounts();
-    if (SHEET_API_URL) pushToSheet(cat, items);
-    setVoiceWarn('已把 ' + items.length + ' 個單字存進字庫');
-    setTimeout(() => setVoiceWarn(''), 3000);
-  };
-
-  const startListening = () => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      setVoiceWarn('這個瀏覽器不支援語音輸入，請改用打字。（iPhone 建議用 Safari，Android 用 Chrome）');
-      setTimeout(() => setVoiceWarn(''), 6000);
-      return;
-    }
-    if (isListening) { // 再按一次＝停止
-      try { recognitionRef.current && recognitionRef.current.stop(); } catch {}
-      setIsListening(false);
-      return;
-    }
-    const rec = new SR();
-    recognitionRef.current = rec;
-    rec.lang = activeScene.lang; // 用該情境語言辨識（日文情境就聽日文）
-    rec.interimResults = true;
-    rec.continuous = false;
-    let finalText = '';
-    rec.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += t; else interim += t;
-      }
-      setChatInput(finalText + interim);
-    };
-    rec.onerror = () => { setIsListening(false); };
-    rec.onend = () => { setIsListening(false); };
-    try { rec.start(); setIsListening(true); } catch { setIsListening(false); }
-  };
-
-  const sendChat = async () => {
-    const text = chatInput.trim();
-    if (!text || chatLoading) return;
-    const userMsg = { role: 'user', text };
-    const nextMsgs = [...messages, userMsg];
-    setMessages(nextMsgs);
-    setChatInput('');
-    setChatLoading(true);
-
-    const isJa = activeScene.lang === 'ja-JP';
-    const langName = isJa ? '日文' : '英文';
-    const readingHint = isJa ? '平假名與羅馬拼音' : 'KK 音標';
-    const systemPrompt = `你正在扮演「${activeScene.role}」，情境是「${activeScene.title}」，與一位正在學${langName}的學習者對話。目標語言＝${langName}。
-
-請判斷使用者「最後一句」是用目標語言、還是用中文打的：
-
-【情況 A：使用者用目標語言（${langName}）】
-- userTarget：把使用者那句修正成最自然正確的${langName}（若本來就對就原樣）。
-- userReading：userTarget 的${readingHint}。
-- userMeaning：那句話的繁體中文意思。
-- correction：若原句有錯，用繁體中文簡短指出並給道地說法；無誤則空字串。
-
-【情況 B：使用者用中文打的（代表他不會講，想學怎麼說）】
-- userTarget：把使用者想表達的意思，翻成自然的${langName}說法。
-- userReading：userTarget 的${readingHint}。
-- userMeaning：使用者原本的中文（原樣）。
-- correction：用繁體中文鼓勵式說明「你想說的，${langName}可以這樣講」，點出關鍵字詞。
-
-兩種情況都要回覆對話本身：
-- reply：以${activeScene.role}身分，用${langName}自然回應 userTarget 的內容，簡短、難度適中、推進劇情。
-- replyReading：reply 的${readingHint}。
-- replyTranslation：reply 的繁體中文翻譯。
-語氣像親切的家教。`;
-
-    // 只送純文字歷史給後端
-    const history = nextMsgs.map((m) => ({ role: m.role, text: m.text }));
-
-    try {
-      const r = await fetch(API_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'chat', systemPrompt, history })
-      });
-      if (!r.ok) throw new Error('backend');
-      const data = await r.json();
-      if (!data.ok || !data.text) throw new Error('empty');
-      const parsed = JSON.parse(data.text);
-      setMessages((prev) => {
-        const copy = [...prev];
-        // 把日文版、讀音、釋義、糾錯掛到剛剛那則 user 訊息上
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].role === 'user') {
-            copy[i] = {
-              ...copy[i],
-              target: parsed.userTarget || copy[i].text,
-              reading: parsed.userReading || '',
-              meaning: parsed.userMeaning || '',
-              correction: parsed.correction || ''
-            };
-            break;
+    // ---------- 語音合成模式：用 Gemini TTS 生成高品質語音 ----------
+    if (mode === 'tts') {
+      const { text, voice } = body;
+      if (!text) return res.status(400).json({ error: 'Missing text' });
+      const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: voice || 'Kore' } }
           }
         }
-        copy.push({ role: 'model', text: parsed.reply, reading: parsed.replyReading || '', translation: parsed.replyTranslation || '', correction: '' });
-        return copy;
-      });
-    } catch {
-      setMessages((prev) => [...prev, { role: 'model', text: '（連線出了點問題，請再說一次）', reading: '', translation: '', correction: '', isError: true }]);
-    } finally {
-      setChatLoading(false);
+      };
+      // Preview 模型偶爾會回文字而非音訊導致 500，故帶重試
+      let retries = 3, delay = 700, lastErr;
+      while (retries > 0) {
+        try {
+          const r = await fetch(ttsUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!r.ok) throw new Error('TTS ' + r.status);
+          const data = await r.json();
+          const part = data.candidates?.[0]?.content?.parts?.[0];
+          const audio = part?.inlineData?.data;
+          if (!audio) throw new Error('No audio');
+          // 回傳 base64 PCM 與取樣率（前端組 WAV）
+          return res.status(200).json({ ok: true, audio, mimeType: part.inlineData.mimeType || 'audio/L16;rate=24000' });
+        } catch (err) {
+          lastErr = err; retries--;
+          if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
+        }
+      }
+      return res.status(502).json({ ok: false, error: 'TTS failed: ' + String(lastErr) });
     }
-  };
 
-  const card = vocabList[currentIndex];
-  const isJaCard = card?.lang === 'ja-JP';
-  const totalStored = Object.values(cacheCounts).reduce((a, b) => a + b, 0);
+    // ---------- 新聞模式：抓 NHK RSS，解析成 JSON ----------
+    if (mode === 'news') {
+      const NHK_RSS = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+      try {
+        const r = await fetch(NHK_RSS, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!r.ok) throw new Error('NHK ' + r.status);
+        const xml = await r.text();
 
-  const CloudBadge = () => {
-    if (cloudState === 'off') return null;
-    const map = {
-      syncing: { icon: <IcCloud size={13} />, text: '同步中', color: 'var(--ink-soft)' },
-      ok: { icon: <IcCloud size={13} />, text: '已同步', color: 'var(--accent)' },
-      error: { icon: <IcCloudOff size={13} />, text: '雲端未連線', color: '#A35' }
+        // 簡單解析 <item>，取 title / link / description / pubDate
+        const items = [];
+        const itemBlocks = xml.split('<item>').slice(1);
+        const pick = (block, tag) => {
+          // 支援 CDATA 與一般文字
+          const re = new RegExp('<' + tag + '>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</' + tag + '>');
+          const m = block.match(re);
+          return m ? m[1].trim() : '';
+        };
+        for (const block of itemBlocks) {
+          const title = pick(block, 'title');
+          if (!title) continue;
+          items.push({
+            title,
+            link: pick(block, 'link'),
+            description: pick(block, 'description'),
+            pubDate: pick(block, 'pubDate')
+          });
+          if (items.length >= 12) break;
+        }
+        return res.status(200).json({ ok: true, items });
+      } catch (err) {
+        return res.status(502).json({ ok: false, error: 'NHK fetch failed: ' + String(err) });
+      }
+    }
+
+    // ---------- 對話模式 ----------
+    if (mode === 'chat') {
+      const { systemPrompt, history } = body;
+      if (!systemPrompt || !Array.isArray(history)) {
+        return res.status(400).json({ error: 'Missing systemPrompt or history' });
+      }
+      // 把前端的 [{role:'user'|'model', text}] 轉成 Gemini 的 contents 格式
+      const contents = history.map((m) => ({
+        role: m.role === 'model' ? 'model' : 'user',
+        parts: [{ text: m.text }]
+      }));
+
+      const payload = {
+        contents,
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              userTarget: { type: 'STRING', description: '使用者上一句「翻成目標語言」的自然說法。若使用者本來就用目標語言講且正確，原樣放這；若使用者打的是中文，這裡放對應的目標語言說法。沒有使用者發言則空字串。' },
+              userReading: { type: 'STRING', description: 'userTarget 的讀音（日文假名/羅馬拼音，英文音標）。沒有則空字串。' },
+              userMeaning: { type: 'STRING', description: '使用者那句話的繁體中文意思。沒有則空字串。' },
+              reply: { type: 'STRING', description: '角色用目標語言的自然回覆' },
+              replyReading: { type: 'STRING', description: '回覆的讀音（日文假名/羅馬拼音，英文音標）' },
+              replyTranslation: { type: 'STRING', description: '回覆的繁體中文翻譯' },
+              correction: { type: 'STRING', description: '若使用者用目標語言但有錯，指出並給更道地說法；若使用者打中文，這裡簡短說明「你想說的可以這樣講」；都沒問題則空字串' }
+            },
+            required: ['reply', 'replyTranslation']
+          }
+        }
+      };
+      const text = await callGemini(payload);
+      return res.status(200).json({ ok: true, text });
+    }
+
+    // ---------- 單字/故事生成（原本的，向後相容） ----------
+    const { promptText, responseSchema } = body;
+    if (!promptText || !responseSchema) {
+      return res.status(400).json({ error: 'Missing promptText or responseSchema' });
+    }
+    const payload = {
+      contents: [{ parts: [{ text: promptText }] }],
+      systemInstruction: { parts: [{ text: '你是專業的語言教學助理。嚴格輸出符合要求的 JSON，不含任何 markdown 標籤或說明文字。' }] },
+      generationConfig: { responseMimeType: 'application/json', responseSchema }
     };
-    const s = map[cloudState] || map.syncing;
-    return <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, letterSpacing:'.1em', color:s.color }}>{s.icon}{s.text}</span>;
-  };
+    const text = await callGemini(payload);
+    return res.status(200).json({ ok: true, text });
 
-  return (
-    <div className="lm-root">
-      <div className="lm-paper-texture" />
-      {voiceWarn && (
-        <div style={{ position:'fixed', top:16, left:'50%', transform:'translateX(-50%)', zIndex:200, maxWidth:'90%',
-          background:'var(--ink)', color:'var(--paper)', padding:'12px 18px', borderRadius:8, fontSize:13, lineHeight:1.5,
-          boxShadow:'0 10px 30px rgba(0,0,0,.25)' }} className="lm-rise">
-          🔊 {voiceWarn}
-        </div>
-      )}
-      <header style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'flex-end', padding:'clamp(20px,4vw,40px) clamp(20px,5vw,56px) 0' }}>
-        <div>
-          <div className="lm-serif" style={{ fontSize:'clamp(26px,5vw,40px)', fontWeight:500, letterSpacing:'-.02em', lineHeight:1 }}>
-            Lingua<span style={{ fontStyle:'italic', fontWeight:400, color:'var(--accent)' }}>Mode</span>
-          </div>
-          <div style={{ fontSize:11, letterSpacing:'.28em', textTransform:'uppercase', color:'var(--ink-soft)', marginTop:8 }}>字卡・以紙為念</div>
-        </div>
-        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
-          <span style={{ fontSize:11, letterSpacing:'.28em', color:'var(--ink-soft)' }}>MMXXVI</span>
-          <CloudBadge />
-        </div>
-      </header>
-      <div style={{ height:1, background:'var(--rule)', margin:'20px clamp(20px,5vw,56px) 0', position:'relative', zIndex:10 }} />
-
-      <main style={{ position:'relative', zIndex:10, maxWidth:920, margin:'0 auto', padding:'clamp(28px,5vw,52px) clamp(20px,5vw,56px) 80px',
-        transition:'opacity .5s, transform .5s', opacity: activeCategory ? 0 : 1, transform: activeCategory ? 'scale(.98)' : 'none', pointerEvents: activeCategory ? 'none' : 'auto' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', flexWrap:'wrap', gap:16, margin:'0 0 clamp(28px,4vw,44px)' }}>
-          <p className="lm-serif" style={{ fontSize:'clamp(18px,2.5vw,22px)', fontWeight:300, color:'var(--ink-soft)', maxWidth:460, lineHeight:1.5, margin:0 }}>
-            選一個程度，先讀快取、不夠才請 AI 補。<br />翻面之前，先在心裡默念一次。
-          </p>
-          {totalStored > 0 && (
-            <span style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:13, color:'var(--ink-soft)' }}>
-              <IcDatabase size={14} style={{ color:'var(--accent)' }} /> 字庫已存 <span className="lm-serif" style={{ fontSize:20, color:'var(--accent)', fontWeight:500 }}>{totalStored}</span> 字
-            </span>
-          )}
-        </div>
-
-        {/* 今日複習入口 */}
-        {dueCount > 0 && (
-          <button className="lm-btn" onClick={startReview}
-            style={{ width:'100%', display:'flex', alignItems:'center', gap:16, padding:'18px 22px', border:'2px solid var(--accent)', borderRadius:4, background:'rgba(46,58,102,.05)', textAlign:'left', marginBottom:'clamp(28px,4vw,40px)', transition:'all .2s' }}
-            onMouseEnter={(e)=>{ e.currentTarget.style.background='rgba(46,58,102,.1)'; e.currentTarget.style.transform='translateY(-2px)'; }}
-            onMouseLeave={(e)=>{ e.currentTarget.style.background='rgba(46,58,102,.05)'; e.currentTarget.style.transform='none'; }}>
-            <span style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcBrain size={24} /></span>
-            <span style={{ display:'flex', flexDirection:'column', gap:2, flex:1 }}>
-              <span className="lm-serif" style={{ fontSize:'clamp(18px,3vw,22px)', fontWeight:500, color:'var(--accent)' }}>今日複習</span>
-              <span style={{ fontSize:13, color:'var(--ink-soft)' }}>有 <b style={{ color:'var(--accent)' }}>{dueCount}</b> 個字到了該複習的時間</span>
-            </span>
-            <IcRight size={20} style={{ color:'var(--accent)', flexShrink:0 }} />
-          </button>
-        )}
-
-        <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-          {CATEGORIES.map((cat) => (
-            <button key={cat.id} className="lm-btn"
-              onClick={() => { setActiveCategory(cat); loadVocab(cat); }}
-              aria-label={`開始 ${cat.id} ${cat.title}`}
-              style={{ display:'flex', alignItems:'center', gap:'clamp(16px,3vw,28px)', padding:'clamp(16px,2.5vw,22px) 8px', borderBottom:'1px solid var(--rule)', textAlign:'left', width:'100%' }}
-              onMouseEnter={(e) => { e.currentTarget.style.paddingLeft='20px'; e.currentTarget.querySelector('.lm-cat-id').style.color=depthColor(cat.depth); }}
-              onMouseLeave={(e) => { e.currentTarget.style.paddingLeft='8px'; e.currentTarget.querySelector('.lm-cat-id').style.color='var(--ink)'; }}>
-              <span style={{ display:'flex', gap:3, flexShrink:0, width:70 }}>
-                {[0,1,2,3,4,5].map(s => <span key={s} style={{ width:8, height:22, borderRadius:1, background: s <= cat.depth ? depthColor(cat.depth) : 'var(--paper-2)', transition:'background .3s' }} />)}
-              </span>
-              <span className="lm-cat-id lm-serif" style={{ fontSize:'clamp(28px,5vw,44px)', fontWeight:500, letterSpacing:'-.02em', width:110, flexShrink:0, transition:'color .3s' }}>{cat.id}</span>
-              <span className="lm-jp-serif" style={{ fontSize:'clamp(15px,2vw,18px)', color:'var(--ink-soft)', flex:1 }}>{cat.title}</span>
-              {cacheCounts[cat.id] > 0 && <span style={{ fontSize:12, color:'var(--accent)', flexShrink:0, fontVariantNumeric:'tabular-nums' }}>{cacheCounts[cat.id]} 字</span>}
-              <span style={{ fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--ink-soft)', flexShrink:0 }}>{cat.lang === 'ja-JP' ? '日本語' : 'English'}</span>
-              <IcRight size={18} style={{ color:'var(--ink-soft)', flexShrink:0 }} />
-            </button>
-          ))}
-        </div>
-
-        <div style={{ marginTop:'clamp(32px,5vw,48px)', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', borderTop:'2px solid var(--ink)', paddingTop:20 }}>
-          <span className="lm-serif" style={{ fontStyle:'italic', fontSize:18, color:'var(--accent)', flexShrink:0 }}>或，自訂一個情境</span>
-          <div style={{ display:'flex', alignItems:'center', gap:12, flex:1, minWidth:260 }}>
-            <select value={customLang} onChange={(e) => setCustomLang(e.target.value)} aria-label="語言"
-              style={{ background:'transparent', border:'none', borderBottom:'1px solid var(--rule)', fontFamily:'Inter,sans-serif', fontSize:13, letterSpacing:'.1em', color:'var(--ink)', padding:'6px 4px', outline:'none', cursor:'pointer' }}>
-              <option value="ja-JP">日文</option><option value="en-US">英文</option>
-            </select>
-            <input value={customTopic} onChange={(e) => setCustomTopic(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCustomGenerate()}
-              placeholder="如：在咖啡廳點餐" className="lm-jp-serif"
-              style={{ flex:1, minWidth:120, background:'transparent', border:'none', borderBottom:'1px solid var(--rule)', fontSize:18, color:'var(--ink)', padding:'6px 4px', outline:'none' }} />
-            <button onClick={handleCustomGenerate} disabled={!customTopic.trim()} className="lm-btn"
-              style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'12px 22px', borderRadius:2, fontSize:13, letterSpacing:'.05em', flexShrink:0, opacity: customTopic.trim() ? 1 : 0.35 }}>
-              <IcSparkles size={15} /> 生成
-            </button>
-          </div>
-        </div>
-
-        <div style={{ marginTop:'clamp(36px,5vw,52px)' }}>
-          <div style={{ display:'flex', alignItems:'baseline', gap:12, marginBottom:18 }}>
-            <span className="lm-serif" style={{ fontSize:'clamp(20px,3vw,26px)', fontWeight:500 }}>對話練習</span>
-            <span style={{ fontSize:12, letterSpacing:'.15em', color:'var(--ink-soft)' }}>跟 AI 角色實戰，即時糾錯</span>
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))', gap:10 }}>
-            {CHAT_SCENES.map((sc) => (
-              <button key={sc.id} className="lm-btn"
-                onClick={() => startScene(sc)}
-                style={{ display:'flex', alignItems:'center', gap:12, padding:'16px 16px', border:'1px solid var(--rule)', borderRadius:4, background:'var(--paper-2)', textAlign:'left', transition:'all .2s' }}
-                onMouseEnter={(e)=>{ e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateY(-2px)'; }}
-                onMouseLeave={(e)=>{ e.currentTarget.style.borderColor='var(--rule)'; e.currentTarget.style.transform='none'; }}>
-                <span style={{ fontSize:24, flexShrink:0 }}>{sc.icon}</span>
-                <span style={{ display:'flex', flexDirection:'column', gap:2, minWidth:0 }}>
-                  <span className="lm-jp-serif" style={{ fontSize:15, fontWeight:500, color:'var(--ink)' }}>{sc.title}</span>
-                  <span style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)', textTransform:'uppercase' }}>{sc.lang === 'ja-JP' ? '日本語' : 'English'}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ marginTop:'clamp(36px,5vw,52px)' }}>
-          <button className="lm-btn" onClick={loadNews}
-            style={{ width:'100%', display:'flex', alignItems:'center', gap:16, padding:'20px 22px', border:'1px solid var(--ink)', borderRadius:4, background:'var(--ink)', textAlign:'left', transition:'all .2s' }}
-            onMouseEnter={(e)=>{ e.currentTarget.style.transform='translateY(-2px)'; }}
-            onMouseLeave={(e)=>{ e.currentTarget.style.transform='none'; }}>
-            <span style={{ fontSize:30, flexShrink:0 }}>📰</span>
-            <span style={{ display:'flex', flexDirection:'column', gap:3, flex:1, minWidth:0 }}>
-              <span className="lm-serif" style={{ fontSize:'clamp(18px,3vw,22px)', fontWeight:500, color:'var(--paper)' }}>今日日本新聞</span>
-              <span style={{ fontSize:12, color:'rgba(247,244,237,.65)' }}>NHK 即時新聞・點開可加讀音翻譯、難易可切換</span>
-            </span>
-            <IcRight size={20} style={{ color:'var(--paper)', flexShrink:0 }} />
-          </button>
-        </div>
-      </main>
-
-      {activeCategory && (
-        <div style={{ position:'fixed', inset:0, zIndex:50, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
-          <div className="lm-paper-texture" />
-          <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(18px,3vw,28px) clamp(20px,5vw,48px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
-            <div style={{ display:'flex', alignItems:'baseline', gap:14, minWidth:0 }}>
-              <span className="lm-serif" style={{ fontSize:'clamp(20px,3vw,28px)', fontWeight:500 }}>{activeCategory.id}</span>
-              <span className="lm-jp-serif" style={{ fontSize:14, color:'var(--ink-soft)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{activeCategory.title}</span>
-              {!isLoading && vocabList.length > 0 && !showStoryView && (
-                <span className="lm-serif" style={{ fontSize:14, color:'var(--accent)', flexShrink:0 }}>{currentIndex + 1} <span style={{ color:'var(--ink-soft)' }}>／ {vocabList.length}</span></span>
-              )}
-              {source === 'cache' && !isLoading && (
-                <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)', flexShrink:0 }}><IcDatabase size={12} /> 來自字庫</span>
-              )}
-            </div>
-            <button onClick={closeOverlay} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
-          </div>
-
-          {!isLoading && vocabList.length > 0 && !showStoryView && (
-            <div style={{ position:'relative', zIndex:10, display:'flex', gap:4, padding:'0 clamp(20px,5vw,48px)', marginTop:16, flexShrink:0 }}>
-              {vocabList.map((_, i) => <div key={i} style={{ height:3, flex:1, borderRadius:2, background: i <= currentIndex ? 'var(--accent)' : 'var(--rule)', transition:'background .4s' }} />)}
-            </div>
-          )}
-
-          <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'clamp(20px,4vw,48px)' }}>
-            {isLoading ? (
-              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:20 }}>
-                <div style={{ width:40, height:40, border:'2px solid var(--rule)', borderTopColor:'var(--accent)', borderRadius:'50%', animation:'spin 1s linear infinite' }} />
-                <p className="lm-serif" style={{ fontStyle:'italic', fontSize:16, color:'var(--ink-soft)' }}>正在抽取字卡…</p>
-              </div>
-            ) : errorMsg ? (
-              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:18, textAlign:'center' }}>
-                <p className="lm-serif" style={{ fontSize:17, color:'var(--ink)' }}>{errorMsg}</p>
-                <button onClick={() => loadVocab(activeCategory, true)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'12px 24px', borderRadius:2, fontSize:13 }}><IcRefresh size={15} /> 換一批</button>
-              </div>
-            ) : showStoryView ? (
-              <div className="lm-rise lm-hide-scroll" style={{ width:'100%', maxWidth:600, maxHeight:'100%', overflowY:'auto' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:24 }}>
-                  <IcBook size={20} style={{ color:'var(--accent)' }} />
-                  <h3 className="lm-serif" style={{ fontSize:'clamp(22px,4vw,30px)', fontWeight:500, margin:0 }}>記憶短文</h3>
-                </div>
-                {isStoryLoading ? (
-                  <p className="lm-serif" style={{ fontStyle:'italic', fontSize:16, color:'var(--ink-soft)', textAlign:'center', padding:'40px 0' }}>撰寫專屬故事中…</p>
-                ) : storyError ? (
-                  <p className="lm-serif" style={{ fontSize:16, color:'var(--ink)', textAlign:'center', padding:'40px 0' }}>{storyError}</p>
-                ) : storyData ? (
-                  <article style={{ borderTop:'2px solid var(--ink)', paddingTop:24 }}>
-                    <div style={{ display:'flex', alignItems:'flex-start', gap:16 }}>
-                      <p className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ flex:1, fontSize:'clamp(19px,3vw,24px)', lineHeight:1.8, margin:0 }}>{storyData.story}</p>
-                      <button onClick={() => speak(storyData.story, activeCategory.lang, 'story')} className="lm-btn" aria-label="播放" style={{ flexShrink:0, width:42, height:42, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center', marginTop:4 }}><IcVolume size={17} /></button>
-                    </div>
-                    <p style={{ fontSize:14, color:'var(--ink-soft)', lineHeight:1.7, margin:'20px 0 0', fontStyle:'italic' }}>{storyData.reading}</p>
-                    <div style={{ height:1, background:'var(--rule)', margin:'20px 0' }} />
-                    <p className="lm-serif" style={{ fontSize:17, color:'var(--ink)', lineHeight:1.7, margin:0 }}>{storyData.translation}</p>
-                  </article>
-                ) : null}
-              </div>
-            ) : card ? (
-              <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:540 }}
-                {...makeSwipe(() => goTo(1), () => goTo(-1), () => setFlipped(f => !f))}>
-                <div className={`lm-flip ${flipped ? 'is-flipped' : ''}`} onClick={() => setFlipped(f => !f)}
-                  style={{ minHeight:'clamp(360px,55vh,460px)', cursor:'pointer' }} role="button" aria-label="翻面" tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter') setFlipped(f => !f); }}>
-                  <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 1px 0 var(--rule), 0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
-                    <span style={{ position:'absolute', top:20, left:24, fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--ink-soft)' }}>正面</span>
-                    <h2 className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(44px,11vw,84px)', fontWeight: isJaCard ? 600 : 500, letterSpacing:'-.02em', margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{card.word}</h2>
-                    <div style={{ marginTop:28, display:'flex', gap:10, alignItems:'center' }}>
-                      <button onClick={(e) => { e.stopPropagation(); speak(card.word, card.lang, card.id); }} className="lm-btn" aria-label="發音"
-                        style={{ display:'inline-flex', alignItems:'center', gap:8, color: speakingId === card.id ? 'var(--paper)' : 'var(--accent)', background: speakingId === card.id ? 'var(--accent)' : 'transparent', border:'1px solid var(--accent)', borderRadius:999, padding:'8px 18px', fontSize:13 }}>
-                        <IcVolume size={15} /> 發音
-                      </button>
-                      {isJaCard && (
-                        <button onClick={(e) => { e.stopPropagation(); speakHQ(card.word, card.id); }} className="lm-btn" aria-label="高品質發音"
-                          style={{ display:'inline-flex', alignItems:'center', gap:6, color:'var(--ink-soft)', background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:999, padding:'8px 14px', fontSize:12 }}>
-                          {hqLoadingId===card.id ? <span className="lm-dot" /> : '✨'} 高品質
-                        </button>
-                      )}
-                    </div>
-                    <span className="lm-serif" style={{ position:'absolute', bottom:18, fontStyle:'italic', fontSize:12, color:'var(--ink-soft)', textAlign:'center', width:'100%', left:0 }}>點一下翻面　·　左右滑切換</span>
-                  </div>
-                  <div className="lm-face back lm-hide-scroll" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', overflowY:'auto' }}>
-                    <span style={{ position:'absolute', top:20, left:24, fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--accent)' }}>背面</span>
-                    <div style={{ marginTop:24, display:'flex', alignItems:'baseline', gap:12, flexWrap:'wrap' }}>
-                      <span className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(24px,5vw,34px)', fontWeight: isJaCard ? 600 : 500 }}>{card.word}</span>
-                      <span style={{ fontSize:14, color:'var(--ink-soft)', fontStyle:'italic' }}>{card.reading}</span>
-                    </div>
-                    <p className="lm-serif" style={{ fontSize:'clamp(22px,4vw,28px)', fontWeight:500, margin:'6px 0 24px', color:'var(--accent)' }}>{card.translation}</p>
-                    <div style={{ height:1, background:'var(--rule)', marginBottom:20 }} />
-                    <div style={{ display:'flex', gap:14, alignItems:'flex-start' }}>
-                      <button onClick={(e) => { e.stopPropagation(); speak(card.sentence, card.lang, `${card.id}-s`); }} className="lm-btn" aria-label="播放例句"
-                        style={{ flexShrink:0, width:34, height:34, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center', marginTop:2 }}><IcVolume size={14} /></button>
-                      <div>
-                        <p className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(17px,3vw,20px)', lineHeight:1.6, margin:0 }}>{card.sentence}</p>
-                        {card.sentenceReading && <p style={{ fontSize:13, color:'var(--ink-soft)', fontStyle:'italic', margin:'8px 0 0' }}>{card.sentenceReading}</p>}
-                        <p className="lm-serif" style={{ fontSize:15, color:'var(--ink-soft)', margin:'8px 0 0' }}>{card.sentenceTranslation}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          {!isLoading && vocabList.length > 0 && (
-            <div className="lm-safe-bottom" style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, padding:'clamp(16px,3vw,28px) clamp(20px,5vw,48px)', borderTop:'1px solid var(--rule)', flexShrink:0, flexWrap:'wrap' }}>
-              {!showStoryView ? (
-                <>
-                  <button onClick={() => goTo(-1)} disabled={currentIndex === 0} className="lm-btn" aria-label="上一張"
-                    style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink)', fontSize:14, opacity: currentIndex === 0 ? 0.25 : 1 }}><IcLeft size={20} /> 上一張</button>
-                  <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'center' }}>
-                    <button onClick={generateStoryFromAI} className="lm-btn"
-                      style={{ display:'flex', alignItems:'center', gap:8, background:'transparent', color:'var(--ink)', border:'1px solid var(--ink)', padding:'10px 18px', borderRadius:2, fontSize:13 }}><IcBook size={15} /> 寫故事</button>
-                    <button onClick={() => loadVocab(activeCategory, true)} className="lm-btn"
-                      style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'11px 20px', borderRadius:2, fontSize:13, letterSpacing:'.04em' }}><IcSparkles size={15} /> AI 生新字</button>
-                  </div>
-                  <button onClick={() => goTo(1)} disabled={currentIndex === vocabList.length - 1} className="lm-btn" aria-label="下一張"
-                    style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink)', fontSize:14, opacity: currentIndex === vocabList.length - 1 ? 0.25 : 1 }}>下一張 <IcRight size={20} /></button>
-                </>
-              ) : (
-                <>
-                  <button onClick={() => setShowStoryView(false)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink)', fontSize:14 }}><IcArrowLeft size={18} /> 返回字卡</button>
-                  <button onClick={() => loadVocab(activeCategory, true)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'11px 22px', borderRadius:2, fontSize:13 }}><IcRefresh size={15} /> 換一批</button>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 對話練習介面 */}
-      {activeScene && (
-        <div style={{ position:'fixed', inset:0, zIndex:60, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
-          <div className="lm-paper-texture" />
-
-          {/* 頂列 */}
-          <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(16px,3vw,24px) clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
-              <span style={{ fontSize:26, flexShrink:0 }}>{activeScene.icon}</span>
-              <div style={{ minWidth:0 }}>
-                <div className="lm-jp-serif" style={{ fontSize:'clamp(16px,2.5vw,20px)', fontWeight:500 }}>{activeScene.title}</div>
-                <div style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)' }}>對方：{activeScene.role}</div>
-              </div>
-            </div>
-            <button onClick={closeScene} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
-          </div>
-
-          {/* 開關列 */}
-          <div style={{ position:'relative', zIndex:10, display:'flex', gap:8, padding:'10px clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0, flexWrap:'wrap' }}>
-            <button onClick={() => setShowCorrection(s => !s)} className="lm-btn"
-              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showCorrection ? 'var(--accent)' : 'var(--rule)'), color: showCorrection ? 'var(--accent)' : 'var(--ink-soft)', background: showCorrection ? 'rgba(46,58,102,.06)' : 'transparent' }}>
-              ✎ 糾錯 {showCorrection ? '開' : '關'}
-            </button>
-            <button onClick={() => setShowTranslation(s => !s)} className="lm-btn"
-              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showTranslation ? 'var(--accent)' : 'var(--rule)'), color: showTranslation ? 'var(--accent)' : 'var(--ink-soft)', background: showTranslation ? 'rgba(46,58,102,.06)' : 'transparent' }}>
-              中 翻譯 {showTranslation ? '開' : '關'}
-            </button>
-          </div>
-
-          {/* 對話區 */}
-          <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', padding:'clamp(16px,4vw,32px) clamp(18px,5vw,40px)', display:'flex', flexDirection:'column', gap:18 }}>
-            {messages.map((m, i) => (
-              m.role === 'model' ? (
-                <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-start' }} className="lm-rise">
-                  <div style={{ fontSize:10, letterSpacing:'.15em', textTransform:'uppercase', color:'var(--ink-soft)', marginBottom:5 }}>{activeScene.role}</div>
-                  <div style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:'3px 16px 16px 16px', padding:'14px 18px' }}>
-                    <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
-                      <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(16px,3vw,19px)', lineHeight:1.6, margin:0, flex:1, color: m.isError ? '#A35' : 'var(--ink)' }}>{m.text}</p>
-                      {!m.isError && (
-                        <button onClick={() => activeScene.lang==='ja-JP' ? speakHQ(m.text, 'chat-'+i) : speak(m.text, activeScene.lang, 'chat-'+i)} className="lm-btn" aria-label="播放"
-                          style={{ flexShrink:0, width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                          {hqLoadingId==='chat-'+i ? <span className="lm-dot" style={{ background:'var(--paper)' }} /> : <IcVolume size={13} />}</button>
-                      )}
-                    </div>
-                    {m.reading && <p style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', margin:'8px 0 0' }}>{m.reading}</p>}
-                    {showTranslation && m.translation && <p className="lm-serif" style={{ fontSize:14, color:'var(--ink-soft)', margin:'6px 0 0' }}>{m.translation}</p>}
-                  </div>
-                </div>
-              ) : (
-                <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-end' }} className="lm-rise">
-                  <div style={{ background:'var(--ink)', borderRadius:'16px 3px 16px 16px', padding:'12px 16px' }}>
-                    {/* 日文版本（若使用者打中文，這裡顯示對應日文；打日文則顯示修正後的句子） */}
-                    {m.target && m.target !== m.text ? (
-                      <>
-                        <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
-                          <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)', flex:1 }}>{m.target}</p>
-                          <button onClick={() => speak(m.target, activeScene.lang, 'u-'+i)} className="lm-btn" aria-label="播放"
-                            style={{ flexShrink:0, width:28, height:28, borderRadius:'50%', background:'rgba(255,255,255,.18)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={12} /></button>
-                        </div>
-                        {m.reading && <p style={{ fontSize:11, color:'rgba(247,244,237,.6)', fontStyle:'italic', margin:'6px 0 0' }}>{m.reading}</p>}
-                      </>
-                    ) : (
-                      <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
-                        <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)', flex:1 }}>{m.text}</p>
-                        {m.target && <button onClick={() => speak(m.target, activeScene.lang, 'u-'+i)} className="lm-btn" aria-label="播放"
-                          style={{ flexShrink:0, width:28, height:28, borderRadius:'50%', background:'rgba(255,255,255,.18)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={12} /></button>}
-                      </div>
-                    )}
-                    {/* 中文釋義 */}
-                    {showTranslation && m.meaning && (
-                      <p className="lm-serif" style={{ fontSize:13, color:'rgba(247,244,237,.7)', margin:'8px 0 0', paddingTop:8, borderTop:'1px solid rgba(255,255,255,.15)' }}>{m.meaning}</p>
-                    )}
-                  </div>
-                  {showCorrection && m.correction && (
-                    <div style={{ marginTop:6, background:'rgba(46,58,102,.06)', border:'1px solid var(--accent-soft)', borderRadius:10, padding:'10px 14px' }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--accent)', fontWeight:600, marginBottom:4 }}>✎ 小老師</div>
-                      <p style={{ fontSize:13, lineHeight:1.6, margin:0, color:'var(--ink)' }}>{m.correction}</p>
-                    </div>
-                  )}
-                </div>
-              )
-            ))}
-            {chatLoading && (
-              <div style={{ alignSelf:'flex-start', display:'flex', gap:5, padding:'10px 4px' }}>
-                <span className="lm-dot" style={{ animationDelay:'0s' }} />
-                <span className="lm-dot" style={{ animationDelay:'.2s' }} />
-                <span className="lm-dot" style={{ animationDelay:'.4s' }} />
-              </div>
-            )}
-          </div>
-
-          {/* 輸入列 */}
-          <div className="lm-safe-bottom" style={{ position:'relative', zIndex:10, display:'flex', gap:10, alignItems:'flex-end', padding:'clamp(12px,3vw,20px) clamp(18px,5vw,40px)', borderTop:'1px solid var(--rule)', flexShrink:0 }}>
-            <button onClick={startListening} className="lm-btn" aria-label="語音輸入"
-              style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', border:'1px solid ' + (isListening ? 'var(--accent)' : 'var(--rule)'), background: isListening ? 'var(--accent)' : 'transparent', color: isListening ? 'var(--paper)' : 'var(--ink-soft)', display:'flex', alignItems:'center', justifyContent:'center', transition:'all .2s', animation: isListening ? 'lm-pulse 1.2s infinite' : 'none' }}>
-              <IcMic size={20} />
-            </button>
-            <textarea value={chatInput} onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
-              placeholder={isListening ? '聽取中…請開始說話' : (activeScene.lang === 'ja-JP' ? '打日文直接對話／打中文教你怎麼說' : 'Type English to chat / type Chinese to learn how')}
-              rows={1} className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'}
-              style={{ flex:1, resize:'none', maxHeight:120, background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:18, padding:'12px 16px', fontSize:16, color:'var(--ink)', outline:'none', lineHeight:1.5, fontFamily:'inherit' }} />
-            <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading} className="lm-btn"
-              style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center', opacity: (!chatInput.trim()||chatLoading) ? 0.4 : 1 }} aria-label="送出">
-              <IcRight size={20} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 新聞介面 */}
-      {showNews && (
-        <div style={{ position:'fixed', inset:0, zIndex:55, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
-          <div className="lm-paper-texture" />
-
-          {/* 頂列 */}
-          <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(16px,3vw,24px) clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-              <span style={{ fontSize:26 }}>📰</span>
-              <div>
-                <div className="lm-serif" style={{ fontSize:'clamp(18px,3vw,24px)', fontWeight:500 }}>今日日本新聞</div>
-                <div style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)' }}>來源：NHK ニュース</div>
-              </div>
-            </div>
-            <button onClick={() => { setShowNews(false); setActiveArticle(null); if (window.speechSynthesis) window.speechSynthesis.cancel(); }} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
-          </div>
-
-          {/* 難度切換（只在清單頁顯示） */}
-          {!activeArticle && (
-            <div style={{ position:'relative', zIndex:10, display:'flex', gap:8, padding:'12px clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
-              <span style={{ fontSize:12, color:'var(--ink-soft)', alignSelf:'center', marginRight:4 }}>閱讀難度</span>
-              {[['easy','簡單日語'],['normal','原文難度']].map(([v,label]) => (
-                <button key={v} onClick={() => setNewsLevel(v)} className="lm-btn"
-                  style={{ fontSize:12, padding:'6px 14px', borderRadius:999, border:'1px solid ' + (newsLevel===v ? 'var(--accent)' : 'var(--rule)'), color: newsLevel===v ? 'var(--paper)' : 'var(--ink-soft)', background: newsLevel===v ? 'var(--accent)' : 'transparent' }}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* 內容 */}
-          <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', padding:'clamp(16px,4vw,32px) clamp(18px,5vw,40px)' }}>
-            {activeArticle ? (
-              /* 單篇閱讀 */
-              <div style={{ maxWidth:680, margin:'0 auto' }} className="lm-rise">
-                <button onClick={() => setActiveArticle(null)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink-soft)', fontSize:13, marginBottom:20 }}><IcArrowLeft size={16} /> 返回清單</button>
-                <h2 className="lm-jp-serif" style={{ fontSize:'clamp(20px,4vw,28px)', fontWeight:600, lineHeight:1.5, margin:'0 0 8px' }}>{activeArticle.title}</h2>
-                <div style={{ fontSize:11, color:'var(--ink-soft)', marginBottom:24 }}>{activeArticle.pubDate}</div>
-
-                {articleLoading ? (
-                  <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, padding:'40px 0' }}>
-                    <div style={{ width:36, height:36, border:'2px solid var(--rule)', borderTopColor:'var(--accent)', borderRadius:'50%', animation:'spin 1s linear infinite' }} />
-                    <p className="lm-serif" style={{ fontStyle:'italic', fontSize:15, color:'var(--ink-soft)' }}>AI 正在加上讀音與翻譯…</p>
-                  </div>
-                ) : activeArticle.processed?.error ? (
-                  <p className="lm-serif" style={{ fontSize:15, color:'#A35', textAlign:'center', padding:'30px 0' }}>{activeArticle.processed.error}</p>
-                ) : activeArticle.processed ? (
-                  <div>
-                    <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
-                      <button onClick={() => speakHQ(activeArticle.processed.simplified, 'news')} className="lm-btn"
-                        style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:12, color:'var(--accent)', border:'1px solid var(--accent)', borderRadius:999, padding:'7px 16px' }}>
-                        {hqLoadingId==='news' ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={14} />} ✨高品質朗讀</button>
-                    </div>
-                    <p className="lm-jp-serif" style={{ fontSize:'clamp(17px,3.5vw,21px)', lineHeight:2, margin:0 }}>{activeArticle.processed.simplified}</p>
-                    {activeArticle.processed.reading && (
-                      <p style={{ fontSize:13, color:'var(--ink-soft)', fontStyle:'italic', lineHeight:1.8, margin:'14px 0 0' }}>{activeArticle.processed.reading}</p>
-                    )}
-                    <div style={{ height:1, background:'var(--rule)', margin:'22px 0' }} />
-                    <p className="lm-serif" style={{ fontSize:'clamp(15px,3vw,17px)', lineHeight:1.8, margin:0, color:'var(--ink)' }}>{activeArticle.processed.translation}</p>
-
-                    {/* 關鍵單字 */}
-                    {activeArticle.processed.words?.length > 0 && (
-                      <div style={{ marginTop:28, borderTop:'2px solid var(--ink)', paddingTop:18 }}>
-                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
-                          <span className="lm-serif" style={{ fontSize:17, fontWeight:500 }}>關鍵單字</span>
-                          <button onClick={() => saveNewsWords(activeArticle.processed.words)} className="lm-btn"
-                            style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12, background:'var(--accent)', color:'var(--paper)', borderRadius:3, padding:'7px 14px' }}><IcDatabase size={13} /> 全部存進字庫</button>
-                        </div>
-                        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                          {activeArticle.processed.words.map((w, i) => (
-                            <div key={i} style={{ display:'flex', alignItems:'baseline', gap:12, padding:'10px 14px', background:'var(--paper-2)', borderRadius:6, border:'1px solid var(--rule)' }}>
-                              <span className="lm-jp-serif" style={{ fontSize:17, fontWeight:600, flexShrink:0 }}>{w.word}</span>
-                              {w.reading && <span style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', flexShrink:0 }}>{w.reading}</span>}
-                              <span className="lm-serif" style={{ fontSize:14, color:'var(--ink)', flex:1, textAlign:'right' }}>{w.meaning}</span>
-                              <button onClick={() => speakHQ(w.word, 'nw-'+i)} className="lm-btn" aria-label="高品質發音" style={{ flexShrink:0, color:'var(--accent)' }}>{hqLoadingId==='nw-'+i ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={15} />}</button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <a href={activeArticle.link} target="_blank" rel="noopener noreferrer"
-                      style={{ display:'inline-block', marginTop:24, fontSize:13, color:'var(--accent)', textDecoration:'underline' }}>看 NHK 原文 ↗</a>
-                  </div>
-                ) : null}
-              </div>
-            ) : newsLoading ? (
-              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:18, padding:'60px 0' }}>
-                <div style={{ width:40, height:40, border:'2px solid var(--rule)', borderTopColor:'var(--accent)', borderRadius:'50%', animation:'spin 1s linear infinite' }} />
-                <p className="lm-serif" style={{ fontStyle:'italic', fontSize:16, color:'var(--ink-soft)' }}>正在抓取今日新聞…</p>
-              </div>
-            ) : newsError ? (
-              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, padding:'60px 0' }}>
-                <p className="lm-serif" style={{ fontSize:16, color:'var(--ink)' }}>{newsError}</p>
-                <button onClick={loadNews} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'12px 24px', borderRadius:2, fontSize:13 }}><IcRefresh size={15} /> 重試</button>
-              </div>
-            ) : (
-              /* 新聞清單 */
-              <div style={{ maxWidth:680, margin:'0 auto', display:'flex', flexDirection:'column' }}>
-                {newsItems.map((item, i) => (
-                  <button key={i} onClick={() => openArticle(item)} className="lm-btn"
-                    style={{ textAlign:'left', padding:'18px 4px', borderBottom:'1px solid var(--rule)', display:'flex', gap:14, alignItems:'flex-start', transition:'padding .2s' }}
-                    onMouseEnter={(e)=>{ e.currentTarget.style.paddingLeft='12px'; }}
-                    onMouseLeave={(e)=>{ e.currentTarget.style.paddingLeft='4px'; }}>
-                    <span className="lm-serif" style={{ fontSize:14, color:'var(--accent)', flexShrink:0, marginTop:3, width:24 }}>{String(i+1).padStart(2,'0')}</span>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <p className="lm-jp-serif" style={{ fontSize:'clamp(15px,3vw,18px)', fontWeight:500, lineHeight:1.5, margin:0 }}>{item.title}</p>
-                      {item.description && <p style={{ fontSize:13, color:'var(--ink-soft)', lineHeight:1.6, margin:'6px 0 0', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{item.description}</p>}
-                    </div>
-                    <IcRight size={16} style={{ color:'var(--ink-soft)', flexShrink:0, marginTop:4 }} />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* SRS 複習介面 */}
-      {reviewMode && (() => {
-        const finished = reviewIndex >= reviewQueue.length;
-        const rc = reviewQueue[reviewIndex];
-        const isJa = rc?.lang === 'ja-JP';
-        return (
-          <div style={{ position:'fixed', inset:0, zIndex:58, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
-            <div className="lm-paper-texture" />
-
-            {/* 頂列 */}
-            <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(16px,3vw,24px) clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                <IcBrain size={22} style={{ color:'var(--accent)' }} />
-                <div>
-                  <div className="lm-serif" style={{ fontSize:'clamp(18px,3vw,22px)', fontWeight:500 }}>今日複習</div>
-                  {!finished && <div style={{ fontSize:11, color:'var(--ink-soft)' }}>{reviewIndex + 1} / {reviewQueue.length}</div>}
-                </div>
-              </div>
-              <button onClick={closeReview} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
-            </div>
-
-            {/* 進度條 */}
-            {!finished && (
-              <div style={{ position:'relative', zIndex:10, height:3, background:'var(--rule)', flexShrink:0 }}>
-                <div style={{ height:'100%', background:'var(--accent)', width:`${(reviewIndex / reviewQueue.length) * 100}%`, transition:'width .3s' }} />
-              </div>
-            )}
-
-            {/* 內容 */}
-            <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'clamp(20px,4vw,40px)' }}>
-              {finished ? (
-                /* 結算 */
-                <div style={{ textAlign:'center', maxWidth:420 }} className="lm-rise">
-                  <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
-                  <h2 className="lm-serif" style={{ fontSize:'clamp(24px,5vw,32px)', fontWeight:500, margin:'0 0 12px' }}>複習完成</h2>
-                  <p className="lm-serif" style={{ fontSize:17, color:'var(--ink-soft)', lineHeight:1.6, margin:'0 0 28px' }}>今天複習了 {reviewDone} 個字。<br />記得的字下次會晚點再出現，忘記的明天見。</p>
-                  <button onClick={closeReview} className="lm-btn" style={{ background:'var(--ink)', color:'var(--paper)', padding:'13px 28px', borderRadius:2, fontSize:14 }}>回首頁</button>
-                </div>
-              ) : rc ? (
-                /* 複習卡 */
-                <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:500 }}
-                  {...makeSwipe(
-                    () => reviewFlipped && gradeCard(0),
-                    () => reviewFlipped && gradeCard(2),
-                    () => setReviewFlipped(f => !f)
-                  )}>
-                  <div className={`lm-flip ${reviewFlipped ? 'is-flipped' : ''}`} onClick={() => setReviewFlipped(f => !f)}
-                    style={{ minHeight:'clamp(320px,48vh,420px)', cursor:'pointer' }} role="button" tabIndex={0}>
-                    {/* 正面：只有字 */}
-                    <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
-                      <h2 className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(40px,10vw,72px)', fontWeight: isJa ? 600 : 500, margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{rc.word}</h2>
-                      <span className="lm-serif" style={{ position:'absolute', bottom:18, fontStyle:'italic', fontSize:12, color:'var(--ink-soft)', textAlign:'center', width:'100%', left:0 }}>點一下看答案</span>
-                    </div>
-                    {/* 背面 */}
-                    <div className="lm-face back" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', justifyContent:'center' }}>
-                      <div style={{ display:'flex', alignItems:'baseline', gap:12, flexWrap:'wrap', marginBottom:8 }}>
-                        <span className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(24px,5vw,34px)', fontWeight: isJa ? 600 : 500 }}>{rc.word}</span>
-                        {rc.reading && <span style={{ fontSize:14, color:'var(--ink-soft)', fontStyle:'italic' }}>{rc.reading}</span>}
-                        <button onClick={(e) => { e.stopPropagation(); isJa ? speakHQ(rc.word, 'rv') : speak(rc.word, rc.lang, 'rv'); }} className="lm-btn" aria-label="發音" style={{ color:'var(--accent)' }}>{hqLoadingId==='rv' ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={16} />}</button>
-                      </div>
-                      <p className="lm-serif" style={{ fontSize:'clamp(22px,4vw,28px)', fontWeight:500, color:'var(--accent)', margin:'0 0 16px' }}>{rc.translation}</p>
-                      {rc.sentence && (
-                        <div style={{ borderTop:'1px solid var(--rule)', paddingTop:14 }}>
-                          <p className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.6, margin:0 }}>{rc.sentence}</p>
-                          {rc.sentenceTranslation && <p className="lm-serif" style={{ fontSize:14, color:'var(--ink-soft)', margin:'6px 0 0' }}>{rc.sentenceTranslation}</p>}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 評價鈕：翻面後才出現 */}
-                  <div style={{ marginTop:20, display:'flex', gap:10, opacity: reviewFlipped ? 1 : 0.35, pointerEvents: reviewFlipped ? 'auto' : 'none', transition:'opacity .3s' }}>
-                    <button onClick={() => gradeCard(0)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid #C25', color:'#C25', background:'transparent', fontSize:14, fontWeight:500 }}>忘了<div style={{ fontSize:10, opacity:.6, marginTop:2 }}>明天再考</div></button>
-                    <button onClick={() => gradeCard(1)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid var(--ink-soft)', color:'var(--ink)', background:'transparent', fontSize:14, fontWeight:500 }}>模糊<div style={{ fontSize:10, opacity:.6, marginTop:2 }}>過幾天</div></button>
-                    <button onClick={() => gradeCard(2)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid var(--accent)', color:'var(--paper)', background:'var(--accent)', fontSize:14, fontWeight:500 }}>記得<div style={{ fontSize:10, opacity:.7, marginTop:2 }}>拉長間隔</div></button>
-                  </div>
-                  {!reviewFlipped ? <p style={{ textAlign:'center', fontSize:12, color:'var(--ink-soft)', marginTop:14 }}>先想一下意思，再翻面評價</p>
-                    : <p style={{ textAlign:'center', fontSize:11, color:'var(--ink-soft)', marginTop:12 }}>← 左滑＝忘了　·　右滑＝記得 →</p>}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        );
-      })()}
-    </div>
-  );
+  } catch (err) {
+    return res.status(502).json({ ok: false, error: String(err) });
+  }
 }
-
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
-</body>
-</html>
