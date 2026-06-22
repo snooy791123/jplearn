@@ -41,6 +41,13 @@
   @keyframes lm-blink { 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
   .lm-dot { width:7px; height:7px; border-radius:50%; background:var(--ink-soft); display:inline-block; animation:lm-blink 1.2s infinite; }
   @keyframes lm-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(46,58,102,.4);} 50%{box-shadow:0 0 0 8px rgba(46,58,102,0);} }
+  /* 手機優化 */
+  .lm-btn { min-height:44px; min-width:44px; touch-action:manipulation; } /* 觸控目標至少 44px、消除點擊延遲 */
+  .lm-safe-bottom { padding-bottom:max(env(safe-area-inset-bottom), 16px); } /* 避開 iPhone home 手勢條 */
+  .lm-flip-wrap { touch-action:pan-y; } /* 允許垂直捲動，水平交給滑動手勢 */
+  @media (hover:hover) { /* 只有真的有滑鼠時才啟用 hover 效果 */
+    .lm-hoverable:hover { opacity:.85; }
+  }
   @media (prefers-reduced-motion:reduce){ *{animation-duration:.001ms!important; transition-duration:.001ms!important;} }
 </style>
 </head>
@@ -259,6 +266,34 @@ function App() {
   const [voiceWarn, setVoiceWarn] = useState('');
   const [hqLoadingId, setHqLoadingId] = useState(null);
   const hqAudioRef = React.useRef(null);
+  const touchRef = React.useRef({ x: 0, y: 0, t: 0 });
+
+  // 產生左右滑手勢處理器：onLeft 往左滑(下一張)、onRight 往右滑(上一張)、onTap 輕點
+  const makeSwipe = (onLeft, onRight, onTap) => ({
+    onTouchStart: (e) => {
+      const t = e.touches[0];
+      touchRef.current = { x: t.clientX, y: t.clientY, t: Date.now(), moved: false };
+    },
+    onTouchMove: (e) => {
+      const t = e.touches[0];
+      const dx = Math.abs(t.clientX - touchRef.current.x);
+      const dy = Math.abs(t.clientY - touchRef.current.y);
+      if (dx > 8 || dy > 8) touchRef.current.moved = true;
+    },
+    onTouchEnd: (e) => {
+      const t = e.changedTouches[0];
+      const dx = t.clientX - touchRef.current.x;
+      const dy = t.clientY - touchRef.current.y;
+      const dt = Date.now() - touchRef.current.t;
+      const absX = Math.abs(dx), absY = Math.abs(dy);
+      if (absX > 40 && absX > absY && dt < 700) {
+        // 確實是橫向滑動
+        if (dx < 0) onLeft && onLeft(); else onRight && onRight();
+      } else if (!touchRef.current.moved && onTap) {
+        onTap(); // 沒怎麼移動 = 輕點
+      }
+    }
+  });
   const [cloudState, setCloudState] = useState(SHEET_API_URL ? 'syncing' : 'off');
   const [cacheCounts, setCacheCounts] = useState({});
 
@@ -924,8 +959,9 @@ ${levelInstr}
                 ) : null}
               </div>
             ) : card ? (
-              <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:540 }}>
-                <div className={`lm-flip ${flipped ? 'is-flipped' : ''}`} onClick={() => setFlipped(f => !f)}
+              <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:540 }}
+                {...makeSwipe(() => goTo(1), () => goTo(-1))}>
+                <div className={`lm-flip ${flipped ? 'is-flipped' : ''}`} onClick={() => { if (!touchRef.current.moved) setFlipped(f => !f); }}
                   style={{ minHeight:'clamp(360px,55vh,460px)', cursor:'pointer' }} role="button" aria-label="翻面" tabIndex={0}
                   onKeyDown={(e) => { if (e.key === 'Enter') setFlipped(f => !f); }}>
                   <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 1px 0 var(--rule), 0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
@@ -943,7 +979,7 @@ ${levelInstr}
                         </button>
                       )}
                     </div>
-                    <span className="lm-serif" style={{ position:'absolute', bottom:20, fontStyle:'italic', fontSize:13, color:'var(--ink-soft)' }}>點卡片翻面 ·</span>
+                    <span className="lm-serif" style={{ position:'absolute', bottom:18, fontStyle:'italic', fontSize:12, color:'var(--ink-soft)', textAlign:'center', width:'100%', left:0 }}>點一下翻面　·　左右滑切換</span>
                   </div>
                   <div className="lm-face back lm-hide-scroll" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', overflowY:'auto' }}>
                     <span style={{ position:'absolute', top:20, left:24, fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--accent)' }}>背面</span>
@@ -969,7 +1005,7 @@ ${levelInstr}
           </div>
 
           {!isLoading && vocabList.length > 0 && (
-            <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, padding:'clamp(16px,3vw,28px) clamp(20px,5vw,48px)', borderTop:'1px solid var(--rule)', flexShrink:0, flexWrap:'wrap' }}>
+            <div className="lm-safe-bottom" style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, padding:'clamp(16px,3vw,28px) clamp(20px,5vw,48px)', borderTop:'1px solid var(--rule)', flexShrink:0, flexWrap:'wrap' }}>
               {!showStoryView ? (
                 <>
                   <button onClick={() => goTo(-1)} disabled={currentIndex === 0} className="lm-btn" aria-label="上一張"
@@ -1086,7 +1122,7 @@ ${levelInstr}
           </div>
 
           {/* 輸入列 */}
-          <div style={{ position:'relative', zIndex:10, display:'flex', gap:10, alignItems:'flex-end', padding:'clamp(12px,3vw,20px) clamp(18px,5vw,40px)', borderTop:'1px solid var(--rule)', flexShrink:0 }}>
+          <div className="lm-safe-bottom" style={{ position:'relative', zIndex:10, display:'flex', gap:10, alignItems:'flex-end', padding:'clamp(12px,3vw,20px) clamp(18px,5vw,40px)', borderTop:'1px solid var(--rule)', flexShrink:0 }}>
             <button onClick={startListening} className="lm-btn" aria-label="語音輸入"
               style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', border:'1px solid ' + (isListening ? 'var(--accent)' : 'var(--rule)'), background: isListening ? 'var(--accent)' : 'transparent', color: isListening ? 'var(--paper)' : 'var(--ink-soft)', display:'flex', alignItems:'center', justifyContent:'center', transition:'all .2s', animation: isListening ? 'lm-pulse 1.2s infinite' : 'none' }}>
               <IcMic size={20} />
@@ -1262,13 +1298,17 @@ ${levelInstr}
                 </div>
               ) : rc ? (
                 /* 複習卡 */
-                <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:500 }}>
-                  <div className={`lm-flip ${reviewFlipped ? 'is-flipped' : ''}`} onClick={() => setReviewFlipped(f => !f)}
+                <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:500 }}
+                  {...makeSwipe(
+                    () => reviewFlipped && gradeCard(0),
+                    () => reviewFlipped && gradeCard(2)
+                  )}>
+                  <div className={`lm-flip ${reviewFlipped ? 'is-flipped' : ''}`} onClick={() => { if (!touchRef.current.moved) setReviewFlipped(f => !f); }}
                     style={{ minHeight:'clamp(320px,48vh,420px)', cursor:'pointer' }} role="button" tabIndex={0}>
                     {/* 正面：只有字 */}
                     <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
                       <h2 className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(40px,10vw,72px)', fontWeight: isJa ? 600 : 500, margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{rc.word}</h2>
-                      <span className="lm-serif" style={{ position:'absolute', bottom:20, fontStyle:'italic', fontSize:13, color:'var(--ink-soft)' }}>點卡片看答案 ·</span>
+                      <span className="lm-serif" style={{ position:'absolute', bottom:18, fontStyle:'italic', fontSize:12, color:'var(--ink-soft)', textAlign:'center', width:'100%', left:0 }}>點一下看答案</span>
                     </div>
                     {/* 背面 */}
                     <div className="lm-face back" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', justifyContent:'center' }}>
@@ -1293,7 +1333,8 @@ ${levelInstr}
                     <button onClick={() => gradeCard(1)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid var(--ink-soft)', color:'var(--ink)', background:'transparent', fontSize:14, fontWeight:500 }}>模糊<div style={{ fontSize:10, opacity:.6, marginTop:2 }}>過幾天</div></button>
                     <button onClick={() => gradeCard(2)} className="lm-btn" style={{ flex:1, padding:'14px 0', borderRadius:4, border:'1px solid var(--accent)', color:'var(--paper)', background:'var(--accent)', fontSize:14, fontWeight:500 }}>記得<div style={{ fontSize:10, opacity:.7, marginTop:2 }}>拉長間隔</div></button>
                   </div>
-                  {!reviewFlipped && <p style={{ textAlign:'center', fontSize:12, color:'var(--ink-soft)', marginTop:14 }}>先想一下意思，再翻面評價</p>}
+                  {!reviewFlipped ? <p style={{ textAlign:'center', fontSize:12, color:'var(--ink-soft)', marginTop:14 }}>先想一下意思，再翻面評價</p>
+                    : <p style={{ textAlign:'center', fontSize:11, color:'var(--ink-soft)', marginTop:12 }}>← 左滑＝忘了　·　右滑＝記得 →</p>}
                 </div>
               ) : null}
             </div>
