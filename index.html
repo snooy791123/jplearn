@@ -992,7 +992,7 @@ ${levelInstr}
             ) : card ? (
               <div className="lm-flip-wrap" style={{ width:'100%', maxWidth:540 }}>
                 <div ref={(node) => { if (node) cardElRef.current = node; }}
-                  {...(() => { const h = makeDrag((dir) => goTo(dir < 0 ? 1 : -1), () => setFlipped(f => !f), true); const { ref, ...rest } = h; return rest; })()}
+                  {...(() => { const h = makeDrag((dir) => goTo(dir < 0 ? -1 : 1), () => setFlipped(f => !f), true); const { ref, ...rest } = h; return rest; })()}
                   style={{ willChange:'transform' }}>
                   <div className={`lm-flip ${flipped ? 'is-flipped' : ''}`}
                     style={{ minHeight:'clamp(360px,55vh,460px)', cursor:'pointer' }} role="button" aria-label="翻面" tabIndex={0}
