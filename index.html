@@ -286,10 +286,12 @@ function App() {
       ref: (node) => { if (node) cardElRef.current = node; },
       onTouchStart: (e) => {
         const t = e.touches[0];
-        dragRef.current = { x: t.clientX, y: t.clientY, t: Date.now(), moved: false, active: true };
+        // 記下觸碰起點是不是落在按鈕/連結上（是的話之後不翻面）
+        const onControl = !!(e.target.closest && e.target.closest('button, a'));
+        dragRef.current = { x: t.clientX, y: t.clientY, t: Date.now(), moved: false, active: true, onControl };
       },
       onTouchMove: (e) => {
-        if (!dragRef.current.active) return;
+        if (!dragRef.current.active || dragRef.current.onControl) return;
         const t = e.touches[0];
         const dx = t.clientX - dragRef.current.x;
         const dy = t.clientY - dragRef.current.y;
@@ -315,7 +317,7 @@ function App() {
             el.style.opacity = '0';
           }
           setTimeout(() => { setTransform(0, false); onCommit && onCommit(dir); }, 220);
-        } else if (!dragRef.current.moved && onTap) {
+        } else if (!dragRef.current.moved && !dragRef.current.onControl && onTap) {
           setTransform(0, false);
           onTap();
         } else {
