@@ -4,12 +4,13 @@
 // 部署前要在 Vercel 專案設定 → Environment Variables 加：
 //   GEMINI_API_KEY = 你的新金鑰
 //
-// 模型可選 gemini-3.5-flash（預設）或更省的 gemini-3.1-flash-lite
+// 支援兩種模式：
+//   1. 單字/故事生成（mode 省略或 'json'）：帶 promptText + responseSchema，回傳結構化 JSON
+//   2. 對話練習（mode 'chat'）：帶 systemPrompt + history，回傳對話 JSON（角色回覆 + 糾錯）
 
 const GEMINI_MODEL = 'gemini-3.5-flash';
 
 export default async function handler(req, res) {
-  // 只允許 POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -19,25 +20,11 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server missing GEMINI_API_KEY' });
   }
 
-  try {
-    const { promptText, responseSchema } = req.body || {};
-    if (!promptText || !responseSchema) {
-      return res.status(400).json({ error: 'Missing promptText or responseSchema' });
-    }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-    const payload = {
-      contents: [{ parts: [{ text: promptText }] }],
-      systemInstruction: {
-        parts: [{ text: '你是專業的語言教學助理。嚴格輸出符合要求的 JSON，不含任何 markdown 標籤或說明文字。' }]
-      },
-      generationConfig: { responseMimeType: 'application/json', responseSchema }
-    };
-
-    // 伺服器端帶指數退避重試
-    let retries = 3;
-    let delay = 800;
-    let lastErr;
+  // 共用的帶重試送出
+  async function callGemini(payload) {
+    let retries = 3, delay = 800, lastErr;
     while (retries > 0) {
       try {
         const r = await fetch(url, {
@@ -49,19 +36,66 @@ export default async function handler(req, res) {
         const data = await r.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) throw new Error('Empty response');
-        // 直接把 Gemini 的 JSON 字串回傳，前端自己 parse
-        return res.status(200).json({ ok: true, text });
+        return text;
       } catch (err) {
-        lastErr = err;
-        retries--;
-        if (retries > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          delay *= 2;
-        }
+        lastErr = err; retries--;
+        if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
       }
     }
-    return res.status(502).json({ ok: false, error: String(lastErr) });
+    throw lastErr;
+  }
+
+  try {
+    const body = req.body || {};
+    const mode = body.mode || 'json';
+
+    // ---------- 對話模式 ----------
+    if (mode === 'chat') {
+      const { systemPrompt, history } = body;
+      if (!systemPrompt || !Array.isArray(history)) {
+        return res.status(400).json({ error: 'Missing systemPrompt or history' });
+      }
+      // 把前端的 [{role:'user'|'model', text}] 轉成 Gemini 的 contents 格式
+      const contents = history.map((m) => ({
+        role: m.role === 'model' ? 'model' : 'user',
+        parts: [{ text: m.text }]
+      }));
+
+      const payload = {
+        contents,
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              reply: { type: 'STRING', description: '角色用該語言的自然回覆' },
+              replyReading: { type: 'STRING', description: '回覆的讀音（日文假名/羅馬拼音，英文音標）' },
+              replyTranslation: { type: 'STRING', description: '回覆的繁體中文翻譯' },
+              correction: { type: 'STRING', description: '針對使用者上一句的糾錯與更道地說法；若使用者沒講錯或還沒開口則回空字串' }
+            },
+            required: ['reply', 'replyTranslation']
+          }
+        }
+      };
+      const text = await callGemini(payload);
+      return res.status(200).json({ ok: true, text });
+    }
+
+    // ---------- 單字/故事生成（原本的，向後相容） ----------
+    const { promptText, responseSchema } = body;
+    if (!promptText || !responseSchema) {
+      return res.status(400).json({ error: 'Missing promptText or responseSchema' });
+    }
+    const payload = {
+      contents: [{ parts: [{ text: promptText }] }],
+      systemInstruction: { parts: [{ text: '你是專業的語言教學助理。嚴格輸出符合要求的 JSON，不含任何 markdown 標籤或說明文字。' }] },
+      generationConfig: { responseMimeType: 'application/json', responseSchema }
+    };
+    const text = await callGemini(payload);
+    return res.status(200).json({ ok: true, text });
+
   } catch (err) {
-    return res.status(500).json({ ok: false, error: String(err) });
+    return res.status(502).json({ ok: false, error: String(err) });
   }
 }
