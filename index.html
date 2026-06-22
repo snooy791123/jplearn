@@ -40,6 +40,7 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes lm-blink { 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
   .lm-dot { width:7px; height:7px; border-radius:50%; background:var(--ink-soft); display:inline-block; animation:lm-blink 1.2s infinite; }
+  @keyframes lm-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(46,58,102,.4);} 50%{box-shadow:0 0 0 8px rgba(46,58,102,0);} }
   @media (prefers-reduced-motion:reduce){ *{animation-duration:.001ms!important; transition-duration:.001ms!important;} }
 </style>
 </head>
@@ -98,6 +99,7 @@ const IcArrowLeft = (p) => <Icon {...p} d={<><line x1="19" y1="12" x2="5" y2="12
 const IcDatabase = (p) => <Icon {...p} d={<><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></>} />;
 const IcCloud = (p) => <Icon {...p} d={<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>} />;
 const IcCloudOff = (p) => <Icon {...p} d={<><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/></>} />;
+const IcMic = (p) => <Icon {...p} d={<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></>} />;
 
 // ---------- 本機快取 ----------
 const cacheKey = (cat) => `${CACHE_PREFIX}${cat.id}:${cat.title}`;
@@ -186,6 +188,8 @@ function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [showCorrection, setShowCorrection] = useState(true);
   const [showTranslation, setShowTranslation] = useState(true);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = React.useRef(null);
 
   useEffect(() => {
     let mounted = true;
@@ -344,6 +348,38 @@ function App() {
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   };
 
+  // 語音輸入：用講的回話。不支援時回 false（前端會提示退回打字）
+  const startListening = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setVoiceWarn('這個瀏覽器不支援語音輸入，請改用打字。（iPhone 建議用 Safari，Android 用 Chrome）');
+      setTimeout(() => setVoiceWarn(''), 6000);
+      return;
+    }
+    if (isListening) { // 再按一次＝停止
+      try { recognitionRef.current && recognitionRef.current.stop(); } catch {}
+      setIsListening(false);
+      return;
+    }
+    const rec = new SR();
+    recognitionRef.current = rec;
+    rec.lang = activeScene.lang; // 用該情境語言辨識（日文情境就聽日文）
+    rec.interimResults = true;
+    rec.continuous = false;
+    let finalText = '';
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t; else interim += t;
+      }
+      setChatInput(finalText + interim);
+    };
+    rec.onerror = () => { setIsListening(false); };
+    rec.onend = () => { setIsListening(false); };
+    try { rec.start(); setIsListening(true); } catch { setIsListening(false); }
+  };
+
   const sendChat = async () => {
     const text = chatInput.trim();
     if (!text || chatLoading) return;
@@ -356,12 +392,27 @@ function App() {
     const isJa = activeScene.lang === 'ja-JP';
     const langName = isJa ? '日文' : '英文';
     const readingHint = isJa ? '平假名與羅馬拼音' : 'KK 音標';
-    const systemPrompt = `你正在扮演「${activeScene.role}」，情境是「${activeScene.title}」，與一位正在學${langName}的學習者對話。
-規則：
-1. reply 欄：用${langName}自然地回應，維持角色身分，句子難度適中、簡短，推進對話。
-2. replyReading 欄：reply 的${readingHint}。
-3. replyTranslation 欄：reply 的繁體中文翻譯。
-4. correction 欄：檢查使用者「最後一句」的${langName}。若有文法、用詞、不自然之處，用繁體中文簡短指出並給更道地的說法；若完全正確或無從糾正，回空字串。語氣像親切的家教。`;
+    const systemPrompt = `你正在扮演「${activeScene.role}」，情境是「${activeScene.title}」，與一位正在學${langName}的學習者對話。目標語言＝${langName}。
+
+請判斷使用者「最後一句」是用目標語言、還是用中文打的：
+
+【情況 A：使用者用目標語言（${langName}）】
+- userTarget：把使用者那句修正成最自然正確的${langName}（若本來就對就原樣）。
+- userReading：userTarget 的${readingHint}。
+- userMeaning：那句話的繁體中文意思。
+- correction：若原句有錯，用繁體中文簡短指出並給道地說法；無誤則空字串。
+
+【情況 B：使用者用中文打的（代表他不會講，想學怎麼說）】
+- userTarget：把使用者想表達的意思，翻成自然的${langName}說法。
+- userReading：userTarget 的${readingHint}。
+- userMeaning：使用者原本的中文（原樣）。
+- correction：用繁體中文鼓勵式說明「你想說的，${langName}可以這樣講」，點出關鍵字詞。
+
+兩種情況都要回覆對話本身：
+- reply：以${activeScene.role}身分，用${langName}自然回應 userTarget 的內容，簡短、難度適中、推進劇情。
+- replyReading：reply 的${readingHint}。
+- replyTranslation：reply 的繁體中文翻譯。
+語氣像親切的家教。`;
 
     // 只送純文字歷史給後端
     const history = nextMsgs.map((m) => ({ role: m.role, text: m.text }));
@@ -378,9 +429,18 @@ function App() {
       const parsed = JSON.parse(data.text);
       setMessages((prev) => {
         const copy = [...prev];
-        // 把糾錯掛到剛剛那則 user 訊息上
+        // 把日文版、讀音、釋義、糾錯掛到剛剛那則 user 訊息上
         for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].role === 'user') { copy[i] = { ...copy[i], correction: parsed.correction || '' }; break; }
+          if (copy[i].role === 'user') {
+            copy[i] = {
+              ...copy[i],
+              target: parsed.userTarget || copy[i].text,
+              reading: parsed.userReading || '',
+              meaning: parsed.userMeaning || '',
+              correction: parsed.correction || ''
+            };
+            break;
+          }
         }
         copy.push({ role: 'model', text: parsed.reply, reading: parsed.replyReading || '', translation: parsed.replyTranslation || '', correction: '' });
         return copy;
@@ -674,7 +734,27 @@ function App() {
               ) : (
                 <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-end' }} className="lm-rise">
                   <div style={{ background:'var(--ink)', borderRadius:'16px 3px 16px 16px', padding:'12px 16px' }}>
-                    <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)' }}>{m.text}</p>
+                    {/* 日文版本（若使用者打中文，這裡顯示對應日文；打日文則顯示修正後的句子） */}
+                    {m.target && m.target !== m.text ? (
+                      <>
+                        <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
+                          <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)', flex:1 }}>{m.target}</p>
+                          <button onClick={() => speak(m.target, activeScene.lang, 'u-'+i)} className="lm-btn" aria-label="播放"
+                            style={{ flexShrink:0, width:28, height:28, borderRadius:'50%', background:'rgba(255,255,255,.18)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={12} /></button>
+                        </div>
+                        {m.reading && <p style={{ fontSize:11, color:'rgba(247,244,237,.6)', fontStyle:'italic', margin:'6px 0 0' }}>{m.reading}</p>}
+                      </>
+                    ) : (
+                      <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
+                        <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)', flex:1 }}>{m.text}</p>
+                        {m.target && <button onClick={() => speak(m.target, activeScene.lang, 'u-'+i)} className="lm-btn" aria-label="播放"
+                          style={{ flexShrink:0, width:28, height:28, borderRadius:'50%', background:'rgba(255,255,255,.18)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={12} /></button>}
+                      </div>
+                    )}
+                    {/* 中文釋義 */}
+                    {showTranslation && m.meaning && (
+                      <p className="lm-serif" style={{ fontSize:13, color:'rgba(247,244,237,.7)', margin:'8px 0 0', paddingTop:8, borderTop:'1px solid rgba(255,255,255,.15)' }}>{m.meaning}</p>
+                    )}
                   </div>
                   {showCorrection && m.correction && (
                     <div style={{ marginTop:6, background:'rgba(46,58,102,.06)', border:'1px solid var(--accent-soft)', borderRadius:10, padding:'10px 14px' }}>
@@ -696,9 +776,13 @@ function App() {
 
           {/* 輸入列 */}
           <div style={{ position:'relative', zIndex:10, display:'flex', gap:10, alignItems:'flex-end', padding:'clamp(12px,3vw,20px) clamp(18px,5vw,40px)', borderTop:'1px solid var(--rule)', flexShrink:0 }}>
+            <button onClick={startListening} className="lm-btn" aria-label="語音輸入"
+              style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', border:'1px solid ' + (isListening ? 'var(--accent)' : 'var(--rule)'), background: isListening ? 'var(--accent)' : 'transparent', color: isListening ? 'var(--paper)' : 'var(--ink-soft)', display:'flex', alignItems:'center', justifyContent:'center', transition:'all .2s', animation: isListening ? 'lm-pulse 1.2s infinite' : 'none' }}>
+              <IcMic size={20} />
+            </button>
             <textarea value={chatInput} onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
-              placeholder={activeScene.lang === 'ja-JP' ? '用日文回覆…（Enter 送出）' : 'Reply in English… (Enter to send)'}
+              placeholder={isListening ? '聽取中…請開始說話' : (activeScene.lang === 'ja-JP' ? '打日文直接對話／打中文教你怎麼說' : 'Type English to chat / type Chinese to learn how')}
               rows={1} className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'}
               style={{ flex:1, resize:'none', maxHeight:120, background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:18, padding:'12px 16px', fontSize:16, color:'var(--ink)', outline:'none', lineHeight:1.5, fontFamily:'inherit' }} />
             <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading} className="lm-btn"
