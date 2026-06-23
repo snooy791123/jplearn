@@ -117,9 +117,6 @@ const CHAT_SCENES = [
   { id: 'biz-en', icon: '🤝', title: 'Business English', role: 'a business client', lang: 'en-US', opener: 'Hi! Thanks for meeting me today. Shall we get started?' }
 ];
 
-const INK = '#D26826';
-const depthColor = (d) => (['#F4A857','#EE9648','#E8843C','#DE7530','#D26826','#C25E22'][d] ?? INK);
-
 // ---------- 內聯 SVG 圖示（取代 lucide-react） ----------
 const Icon = ({ d, size = 20, fill = 'none', style }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
@@ -275,6 +272,19 @@ const pullFromSheet = async () => {
   } catch { return 0; }
 };
 
+// 容錯解析 AI 回傳的 JSON：剝除 markdown 圍欄、抽出 JSON 主體再 parse
+const safeParseJSON = (text) => {
+  if (typeof text !== 'string') return text;
+  let t = text.trim();
+  // 移除 ```json ... ``` 或 ``` ... ``` 圍欄
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  try { return JSON.parse(t); } catch {}
+  // 退而求其次：抓第一個 { 到最後一個 }（或陣列的 [ ]）
+  const objMatch = t.match(/[\{\[][\s\S]*[\}\]]/);
+  if (objMatch) { try { return JSON.parse(objMatch[0]); } catch {} }
+  throw new Error('回傳格式無法解析');
+};
+
 // ---------- 呼叫後端代理 ----------
 const callBackend = async (promptText, responseSchema) => {
   const r = await fetch(API_ENDPOINT, {
@@ -285,7 +295,7 @@ const callBackend = async (promptText, responseSchema) => {
   if (!r.ok) throw new Error(`Backend error: ${r.status}`);
   const data = await r.json();
   if (!data.ok || !data.text) throw new Error(data.error || 'No text');
-  return JSON.parse(data.text);
+  return safeParseJSON(data.text);
 };
 
 function App() {
@@ -538,7 +548,12 @@ function App() {
   const speakHQ = async (text, id) => {
     if (!text) return;
     if (window.speechSynthesis) window.speechSynthesis.cancel();
-    if (hqAudioRef.current) { hqAudioRef.current.pause(); hqAudioRef.current = null; }
+    // 停掉並釋放前一個音訊的 blob URL，避免記憶體累積
+    if (hqAudioRef.current) {
+      hqAudioRef.current.pause();
+      if (hqAudioRef.current._url) URL.revokeObjectURL(hqAudioRef.current._url);
+      hqAudioRef.current = null;
+    }
     setHqLoadingId(id); setSpeakingId(null);
     try {
       const r = await fetch(API_ENDPOINT, {
@@ -552,10 +567,12 @@ function App() {
       const rate = m ? parseInt(m[1], 10) : 24000;
       const url = pcmToWavUrl(data.audio, rate);
       const audio = new Audio(url);
+      audio._url = url; // 記住 URL 以便釋放
       hqAudioRef.current = audio;
       setHqLoadingId(null); setSpeakingId(id);
-      audio.onended = () => { setSpeakingId(null); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setSpeakingId(null); };
+      const cleanup = () => { URL.revokeObjectURL(url); };
+      audio.onended = () => { setSpeakingId(null); cleanup(); };
+      audio.onerror = () => { setSpeakingId(null); cleanup(); };
       audio.play();
     } catch {
       setHqLoadingId(null);
@@ -706,7 +723,7 @@ ${levelInstr}
       });
       const data = await r.json();
       if (!data.ok || !data.text) throw new Error('empty');
-      const parsed = JSON.parse(data.text);
+      const parsed = safeParseJSON(data.text);
       setActiveArticle({ ...item, processed: parsed });
     } catch {
       setActiveArticle({ ...item, processed: { error: '處理這則新聞時發生問題，請返回再試一次。' } });
@@ -807,7 +824,7 @@ ${levelInstr}
       if (!r.ok) throw new Error('backend');
       const data = await r.json();
       if (!data.ok || !data.text) throw new Error('empty');
-      const parsed = JSON.parse(data.text);
+      const parsed = safeParseJSON(data.text);
       setMessages((prev) => {
         const copy = [...prev];
         // 把日文版、讀音、釋義、糾錯掛到剛剛那則 user 訊息上
