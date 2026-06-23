@@ -16,17 +16,51 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html, body, #root { height: 100%; }
-  body { background: #F7F4ED; }
+  body { background: #F4F1EC; }
   :root {
-    --paper:#F7F4ED; --paper-2:#F0EBDF; --ink:#1A1A17; --ink-soft:#6B675C;
-    --rule:#D9D2C2; --accent:#2E3A66; --accent-soft:#5A6694;
+    /* 水晶玻璃版色票：乾淨淺底 + 暖橘重點 */
+    --paper:#F4F1EC; --paper-2:#ECE8E1; --ink:#1C1A17; --ink-soft:#6E665C;
+    --rule:#DDD6CB; --accent:#D26826; --accent-soft:#E8843C;
+    --accent-glow:#F4A857;
   }
-  .lm-root { position:relative; width:100%; min-height:100dvh; background:var(--paper); color:var(--ink);
-    font-family:'Inter','Noto Sans JP',sans-serif; overflow-x:hidden; -webkit-font-smoothing:antialiased; }
+  .lm-root { position:relative; width:100%; min-height:100dvh; color:var(--ink);
+    font-family:'Inter','Noto Sans JP',sans-serif; overflow-x:hidden; -webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%),
+      radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%),
+      linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%);
+    background-attachment:fixed; }
   .lm-serif { font-family:'Newsreader',serif; }
   .lm-jp-serif { font-family:'Noto Serif JP',serif; }
-  .lm-paper-texture { position:absolute; inset:0; pointer-events:none; opacity:.4; mix-blend-mode:multiply;
-    background-image:radial-gradient(circle at 1px 1px, rgba(120,110,90,.06) 1px, transparent 0); background-size:4px 4px; }
+  .lm-paper-texture { display:none; }
+
+  /* 水晶玻璃：高透明 + 亮邊 + 頂部光澤 + 內發光 + 柔和陰影 */
+  .lm-crystal {
+    position:relative;
+    background: linear-gradient(135deg, rgba(255,255,255,0.5), rgba(255,255,255,0.28));
+    backdrop-filter: blur(12px) saturate(130%);
+    -webkit-backdrop-filter: blur(12px) saturate(130%);
+    border: 1px solid rgba(255,255,255,0.85);
+    box-shadow:
+      0 10px 30px rgba(140,120,100,0.16),
+      0 2px 6px rgba(140,120,100,0.08),
+      inset 0 1px 1px rgba(255,255,255,0.95),
+      inset 0 -2px 6px rgba(255,255,255,0.5),
+      inset 0 0 20px rgba(255,255,255,0.22);
+  }
+  .lm-crystal::before {
+    content:''; position:absolute; top:0; left:0; right:0; height:42%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.04) 100%);
+    border-radius: inherit; pointer-events:none; z-index:1;
+  }
+  .lm-crystal > * { position:relative; z-index:2; }
+  /* 拖曳中的卡片用實底（不透明），避免 backdrop-filter 拖曳掉幀 */
+  .lm-solid {
+    background: linear-gradient(160deg, #FBF8F3, #F2EDE5);
+    border: 1px solid rgba(255,255,255,0.9);
+    box-shadow: 0 14px 34px rgba(140,120,100,0.18), inset 0 1px 2px rgba(255,255,255,0.95);
+  }
+
   @keyframes lm-rise { from{opacity:0; transform:translateY(12px);} to{opacity:1; transform:translateY(0);} }
   .lm-rise { animation:lm-rise .5s cubic-bezier(.2,.8,.2,1) both; }
   .lm-flip-wrap { perspective:1600px; }
@@ -40,14 +74,12 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes lm-blink { 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
   .lm-dot { width:7px; height:7px; border-radius:50%; background:var(--ink-soft); display:inline-block; animation:lm-blink 1.2s infinite; }
-  @keyframes lm-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(46,58,102,.4);} 50%{box-shadow:0 0 0 8px rgba(46,58,102,0);} }
+  @keyframes lm-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(210,104,38,.4);} 50%{box-shadow:0 0 0 8px rgba(210,104,38,0);} }
   /* 手機優化 */
-  .lm-btn { min-height:44px; min-width:44px; touch-action:manipulation; } /* 觸控目標至少 44px、消除點擊延遲 */
-  .lm-safe-bottom { padding-bottom:max(env(safe-area-inset-bottom), 16px); } /* 避開 iPhone home 手勢條 */
-  .lm-flip-wrap { touch-action:pan-y; } /* 允許垂直捲動，水平交給滑動手勢 */
-  @media (hover:hover) { /* 只有真的有滑鼠時才啟用 hover 效果 */
-    .lm-hoverable:hover { opacity:.85; }
-  }
+  .lm-btn { min-height:44px; min-width:44px; touch-action:manipulation; }
+  .lm-safe-bottom { padding-bottom:max(env(safe-area-inset-bottom), 16px); }
+  .lm-flip-wrap { touch-action:pan-y; }
+  @media (hover:hover) { .lm-hoverable:hover { opacity:.85; } }
   @media (prefers-reduced-motion:reduce){ *{animation-duration:.001ms!important; transition-duration:.001ms!important;} }
 </style>
 </head>
@@ -85,8 +117,8 @@ const CHAT_SCENES = [
   { id: 'biz-en', icon: '🤝', title: 'Business English', role: 'a business client', lang: 'en-US', opener: 'Hi! Thanks for meeting me today. Shall we get started?' }
 ];
 
-const INK = '#2E3A66';
-const depthColor = (d) => (['#8A93B8','#6B76A6','#525E95','#3E4A82','#2E3A66','#3A4A7A'][d] ?? INK);
+const INK = '#D26826';
+const depthColor = (d) => (['#F4A857','#EE9648','#E8843C','#DE7530','#D26826','#C25E22'][d] ?? INK);
 
 // ---------- 內聯 SVG 圖示（取代 lucide-react） ----------
 const Icon = ({ d, size = 20, fill = 'none', style }) => (
@@ -96,6 +128,14 @@ const Icon = ({ d, size = 20, fill = 'none', style }) => (
   </svg>
 );
 const IcX = (p) => <Icon {...p} d={<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>} />;
+// 對話場景圖示
+const IcCafe = (p) => <Icon {...p} d={<><path d="M17 8h1a4 4 0 0 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></>} />;
+const IcMap = (p) => <Icon {...p} d={<><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></>} />;
+const IcBag = (p) => <Icon {...p} d={<><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></>} />;
+const IcBriefcase = (p) => <Icon {...p} d={<><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></>} />;
+const IcChat = (p) => <Icon {...p} d={<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>} />;
+const IcHandshake = (p) => <Icon {...p} d={<><path d="M11 17l2 2a1 1 0 0 0 3-3"/><path d="M14 14l2.5 2.5a1 1 0 0 0 3-3l-3.88-3.88"/><path d="M5 8l3.5-3.5a2.12 2.12 0 0 1 3 3L9 10"/><path d="M8.5 11.5L11 9"/><path d="M2 14l4 4"/><path d="M22 12l-4-4"/></>} />;
+const SCENE_ICONS = { cafe: IcCafe, direction: IcMap, shopping: IcBag, interview: IcBriefcase, friend: IcChat, 'biz-en': IcHandshake };
 const IcVolume = (p) => <Icon {...p} d={<><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></>} />;
 const IcLeft = (p) => <Icon {...p} d={<polyline points="15 18 9 12 15 6"/>} />;
 const IcRight = (p) => <Icon {...p} d={<polyline points="9 18 15 12 9 6"/>} />;
@@ -823,7 +863,7 @@ ${levelInstr}
           <div className="lm-serif" style={{ fontSize:'clamp(26px,5vw,40px)', fontWeight:500, letterSpacing:'-.02em', lineHeight:1 }}>
             Lingua<span style={{ fontStyle:'italic', fontWeight:400, color:'var(--accent)' }}>Mode</span>
           </div>
-          <div style={{ fontSize:11, letterSpacing:'.28em', textTransform:'uppercase', color:'var(--ink-soft)', marginTop:8 }}>字卡・以紙為念</div>
+          <div style={{ fontSize:11, letterSpacing:'.28em', textTransform:'uppercase', color:'var(--ink-soft)', marginTop:8 }}>字卡・水と光</div>
         </div>
         <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
           <span style={{ fontSize:11, letterSpacing:'.28em', color:'var(--ink-soft)' }}>MMXXVI</span>
@@ -847,72 +887,72 @@ ${levelInstr}
 
         {/* 今日複習入口 */}
         {dueCount > 0 && (
-          <button className="lm-btn" onClick={startReview}
-            style={{ width:'100%', display:'flex', alignItems:'center', gap:16, padding:'18px 22px', border:'2px solid var(--accent)', borderRadius:4, background:'rgba(46,58,102,.05)', textAlign:'left', marginBottom:'clamp(28px,4vw,40px)', transition:'all .2s' }}
-            onMouseEnter={(e)=>{ e.currentTarget.style.background='rgba(46,58,102,.1)'; e.currentTarget.style.transform='translateY(-2px)'; }}
-            onMouseLeave={(e)=>{ e.currentTarget.style.background='rgba(46,58,102,.05)'; e.currentTarget.style.transform='none'; }}>
-            <span style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcBrain size={24} /></span>
+          <button className="lm-btn lm-crystal" onClick={startReview}
+            style={{ width:'100%', display:'flex', alignItems:'center', gap:16, padding:'20px 22px', borderRadius:22, textAlign:'left', marginBottom:'clamp(28px,4vw,40px)', transition:'transform .2s' }}
+            onMouseEnter={(e)=>{ e.currentTarget.style.transform='translateY(-2px)'; }}
+            onMouseLeave={(e)=>{ e.currentTarget.style.transform='none'; }}>
+            <span style={{ flexShrink:0, width:48, height:48, borderRadius:14, background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 6px 16px rgba(210,104,38,.4), inset 0 1px 2px rgba(255,255,255,.5)' }}><IcBrain size={24} /></span>
             <span style={{ display:'flex', flexDirection:'column', gap:2, flex:1 }}>
-              <span className="lm-serif" style={{ fontSize:'clamp(18px,3vw,22px)', fontWeight:500, color:'var(--accent)' }}>今日複習</span>
+              <span style={{ fontSize:'clamp(17px,3vw,20px)', fontWeight:600, color:'var(--accent)' }}>今日複習</span>
               <span style={{ fontSize:13, color:'var(--ink-soft)' }}>有 <b style={{ color:'var(--accent)' }}>{dueCount}</b> 個字到了該複習的時間</span>
             </span>
             <IcRight size={20} style={{ color:'var(--accent)', flexShrink:0 }} />
           </button>
         )}
 
-        <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+        <div className="lm-sec-label" style={{ fontSize:11, letterSpacing:'.25em', color:'var(--ink-soft)', textTransform:'uppercase', margin:'0 4px 14px', display:'flex', alignItems:'center', gap:10 }}>程度<span style={{ flex:1, height:1, background:'var(--rule)' }} /></div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
           {CATEGORIES.map((cat) => (
-            <button key={cat.id} className="lm-btn"
+            <button key={cat.id} className="lm-btn lm-crystal"
               onClick={() => { setActiveCategory(cat); loadVocab(cat); }}
               aria-label={`開始 ${cat.id} ${cat.title}`}
-              style={{ display:'flex', alignItems:'center', gap:'clamp(16px,3vw,28px)', padding:'clamp(16px,2.5vw,22px) 8px', borderBottom:'1px solid var(--rule)', textAlign:'left', width:'100%' }}
-              onMouseEnter={(e) => { e.currentTarget.style.paddingLeft='20px'; e.currentTarget.querySelector('.lm-cat-id').style.color=depthColor(cat.depth); }}
-              onMouseLeave={(e) => { e.currentTarget.style.paddingLeft='8px'; e.currentTarget.querySelector('.lm-cat-id').style.color='var(--ink)'; }}>
-              <span style={{ display:'flex', gap:3, flexShrink:0, width:70 }}>
-                {[0,1,2,3,4,5].map(s => <span key={s} style={{ width:8, height:22, borderRadius:1, background: s <= cat.depth ? depthColor(cat.depth) : 'var(--paper-2)', transition:'background .3s' }} />)}
+              style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:0, padding:'18px', borderRadius:20, textAlign:'left', transition:'transform .2s' }}
+              onMouseEnter={(e) => { e.currentTarget.style.transform='translateY(-2px)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.transform='none'; }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', width:'100%' }}>
+                <span style={{ fontSize:'clamp(26px,5vw,32px)', fontWeight:700, letterSpacing:'-.02em', color:'var(--ink)' }}>{cat.id}</span>
+                <span style={{ fontSize:10, letterSpacing:'.15em', textTransform:'uppercase', color:'var(--ink-soft)' }}>{cat.lang === 'ja-JP' ? '日本語' : 'EN'}</span>
+              </div>
+              <span style={{ fontSize:13, color:'var(--ink-soft)', marginTop:2 }}>{cat.title}{cacheCounts[cat.id] > 0 && <span style={{ color:'var(--accent)', marginLeft:8 }}>{cacheCounts[cat.id]}字</span>}</span>
+              <span style={{ display:'flex', gap:3, marginTop:12, width:'100%' }}>
+                {[0,1,2,3,4,5].map(s => <span key={s} style={{ height:5, flex:1, borderRadius:3, background: s <= cat.depth ? 'var(--accent)' : 'rgba(150,130,115,.22)' }} />)}
               </span>
-              <span className="lm-cat-id lm-serif" style={{ fontSize:'clamp(28px,5vw,44px)', fontWeight:500, letterSpacing:'-.02em', width:110, flexShrink:0, transition:'color .3s' }}>{cat.id}</span>
-              <span className="lm-jp-serif" style={{ fontSize:'clamp(15px,2vw,18px)', color:'var(--ink-soft)', flex:1 }}>{cat.title}</span>
-              {cacheCounts[cat.id] > 0 && <span style={{ fontSize:12, color:'var(--accent)', flexShrink:0, fontVariantNumeric:'tabular-nums' }}>{cacheCounts[cat.id]} 字</span>}
-              <span style={{ fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--ink-soft)', flexShrink:0 }}>{cat.lang === 'ja-JP' ? '日本語' : 'English'}</span>
-              <IcRight size={18} style={{ color:'var(--ink-soft)', flexShrink:0 }} />
             </button>
           ))}
         </div>
 
-        <div style={{ marginTop:'clamp(32px,5vw,48px)', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', borderTop:'2px solid var(--ink)', paddingTop:20 }}>
-          <span className="lm-serif" style={{ fontStyle:'italic', fontSize:18, color:'var(--accent)', flexShrink:0 }}>或，自訂一個情境</span>
-          <div style={{ display:'flex', alignItems:'center', gap:12, flex:1, minWidth:260 }}>
+        <div style={{ marginTop:'clamp(28px,4vw,40px)', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', paddingTop:0 }}>
+          <span style={{ fontSize:11, letterSpacing:'.25em', color:'var(--ink-soft)', textTransform:'uppercase', width:'100%', marginBottom:4, display:'flex', alignItems:'center', gap:10 }}>自訂<span style={{ flex:1, height:1, background:'var(--rule)' }} /></span>
+          <div className="lm-crystal" style={{ display:'flex', alignItems:'center', gap:10, flex:1, minWidth:260, borderRadius:18, padding:'7px 7px 7px 16px' }}>
             <select value={customLang} onChange={(e) => setCustomLang(e.target.value)} aria-label="語言"
-              style={{ background:'transparent', border:'none', borderBottom:'1px solid var(--rule)', fontFamily:'Inter,sans-serif', fontSize:13, letterSpacing:'.1em', color:'var(--ink)', padding:'6px 4px', outline:'none', cursor:'pointer' }}>
+              style={{ background:'transparent', border:'none', borderRight:'1px solid var(--rule)', fontFamily:'Inter,sans-serif', fontSize:13, letterSpacing:'.05em', color:'var(--ink-soft)', padding:'9px 12px 9px 0', outline:'none', cursor:'pointer' }}>
               <option value="ja-JP">日文</option><option value="en-US">英文</option>
             </select>
             <input value={customTopic} onChange={(e) => setCustomTopic(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleCustomGenerate()}
               placeholder="如：在咖啡廳點餐" className="lm-jp-serif"
-              style={{ flex:1, minWidth:120, background:'transparent', border:'none', borderBottom:'1px solid var(--rule)', fontSize:18, color:'var(--ink)', padding:'6px 4px', outline:'none' }} />
+              style={{ flex:1, minWidth:100, background:'transparent', border:'none', fontSize:16, color:'var(--ink)', padding:'9px 4px', outline:'none' }} />
             <button onClick={handleCustomGenerate} disabled={!customTopic.trim()} className="lm-btn"
-              style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'12px 22px', borderRadius:2, fontSize:13, letterSpacing:'.05em', flexShrink:0, opacity: customTopic.trim() ? 1 : 0.35 }}>
-              <IcSparkles size={15} /> 生成
+              style={{ flexShrink:0, width:44, height:44, borderRadius:13, border:'none', background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', opacity: customTopic.trim() ? 1 : 0.4, boxShadow:'0 4px 14px rgba(210,104,38,.4), inset 0 1px 2px rgba(255,255,255,.5)' }}>
+              <IcSparkles size={18} />
             </button>
           </div>
         </div>
 
         <div style={{ marginTop:'clamp(36px,5vw,52px)' }}>
-          <div style={{ display:'flex', alignItems:'baseline', gap:12, marginBottom:18 }}>
-            <span className="lm-serif" style={{ fontSize:'clamp(20px,3vw,26px)', fontWeight:500 }}>對話練習</span>
-            <span style={{ fontSize:12, letterSpacing:'.15em', color:'var(--ink-soft)' }}>跟 AI 角色實戰，即時糾錯</span>
-          </div>
+          <div style={{ fontSize:11, letterSpacing:'.25em', color:'var(--ink-soft)', textTransform:'uppercase', margin:'0 4px 16px', display:'flex', alignItems:'center', gap:10 }}>對話練習<span style={{ flex:1, height:1, background:'var(--rule)' }} /></div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))', gap:10 }}>
             {CHAT_SCENES.map((sc) => (
-              <button key={sc.id} className="lm-btn"
+              <button key={sc.id} className="lm-btn lm-crystal"
                 onClick={() => startScene(sc)}
-                style={{ display:'flex', alignItems:'center', gap:12, padding:'16px 16px', border:'1px solid var(--rule)', borderRadius:4, background:'var(--paper-2)', textAlign:'left', transition:'all .2s' }}
-                onMouseEnter={(e)=>{ e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateY(-2px)'; }}
-                onMouseLeave={(e)=>{ e.currentTarget.style.borderColor='var(--rule)'; e.currentTarget.style.transform='none'; }}>
-                <span style={{ fontSize:24, flexShrink:0 }}>{sc.icon}</span>
+                style={{ display:'flex', alignItems:'center', gap:12, padding:'16px', borderRadius:18, textAlign:'left', transition:'transform .2s' }}
+                onMouseEnter={(e)=>{ e.currentTarget.style.transform='translateY(-2px)'; }}
+                onMouseLeave={(e)=>{ e.currentTarget.style.transform='none'; }}>
+                <span style={{ flexShrink:0, width:40, height:40, borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', background:'linear-gradient(135deg, rgba(244,168,87,.25), rgba(232,132,60,.15))', color:'var(--accent)', border:'1px solid rgba(255,255,255,.6)' }}>
+                  {(() => { const Ic = SCENE_ICONS[sc.id] || IcChat; return <Ic size={20} />; })()}
+                </span>
                 <span style={{ display:'flex', flexDirection:'column', gap:2, minWidth:0 }}>
-                  <span className="lm-jp-serif" style={{ fontSize:15, fontWeight:500, color:'var(--ink)' }}>{sc.title}</span>
+                  <span className="lm-jp-serif" style={{ fontSize:15, fontWeight:600, color:'var(--ink)' }}>{sc.title}</span>
                   <span style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)', textTransform:'uppercase' }}>{sc.lang === 'ja-JP' ? '日本語' : 'English'}</span>
                 </span>
               </button>
@@ -921,22 +961,26 @@ ${levelInstr}
         </div>
 
         <div style={{ marginTop:'clamp(36px,5vw,52px)' }}>
+          <div style={{ fontSize:11, letterSpacing:'.25em', color:'var(--ink-soft)', textTransform:'uppercase', margin:'0 4px 16px', display:'flex', alignItems:'center', gap:10 }}>新聞<span style={{ flex:1, height:1, background:'var(--rule)' }} /></div>
           <button className="lm-btn" onClick={loadNews}
-            style={{ width:'100%', display:'flex', alignItems:'center', gap:16, padding:'20px 22px', border:'1px solid var(--ink)', borderRadius:4, background:'var(--ink)', textAlign:'left', transition:'all .2s' }}
+            style={{ width:'100%', display:'flex', alignItems:'center', gap:16, padding:'22px', borderRadius:22, textAlign:'left', transition:'transform .2s', position:'relative', overflow:'hidden',
+              background:'linear-gradient(125deg, rgba(244,168,87,.5), rgba(232,132,60,.42), rgba(210,104,38,.4))',
+              backdropFilter:'blur(12px) saturate(170%)', WebkitBackdropFilter:'blur(12px) saturate(170%)',
+              border:'1px solid rgba(255,255,255,0.7)', boxShadow:'0 8px 28px rgba(210,104,38,0.22), inset 0 1px 2px rgba(255,255,255,0.8)' }}
             onMouseEnter={(e)=>{ e.currentTarget.style.transform='translateY(-2px)'; }}
             onMouseLeave={(e)=>{ e.currentTarget.style.transform='none'; }}>
             <span style={{ fontSize:30, flexShrink:0 }}>📰</span>
             <span style={{ display:'flex', flexDirection:'column', gap:3, flex:1, minWidth:0 }}>
-              <span className="lm-serif" style={{ fontSize:'clamp(18px,3vw,22px)', fontWeight:500, color:'var(--paper)' }}>今日日本新聞</span>
-              <span style={{ fontSize:12, color:'rgba(247,244,237,.65)' }}>NHK 即時新聞・點開可加讀音翻譯、難易可切換</span>
+              <span style={{ fontSize:'clamp(18px,3vw,21px)', fontWeight:700, color:'#fff', textShadow:'0 1px 4px rgba(160,70,20,.4)' }}>今日日本新聞</span>
+              <span style={{ fontSize:12, color:'rgba(255,255,255,.9)', textShadow:'0 1px 2px rgba(160,70,20,.3)' }}>NHK 即時新聞・點開可加讀音翻譯、難易可切換</span>
             </span>
-            <IcRight size={20} style={{ color:'var(--paper)', flexShrink:0 }} />
+            <IcRight size={20} style={{ color:'#fff', flexShrink:0 }} />
           </button>
         </div>
       </main>
 
       {activeCategory && (
-        <div style={{ position:'fixed', inset:0, zIndex:50, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
+        <div style={{ position:'fixed', inset:0, zIndex:50, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
           <div className="lm-paper-texture" />
           <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(18px,3vw,28px) clamp(20px,5vw,48px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
             <div style={{ display:'flex', alignItems:'baseline', gap:14, minWidth:0 }}>
@@ -999,24 +1043,24 @@ ${levelInstr}
                   <div className={`lm-flip ${flipped ? 'is-flipped' : ''}`}
                     style={{ minHeight:'clamp(360px,55vh,460px)', cursor:'pointer' }} role="button" aria-label="翻面" tabIndex={0}
                     onKeyDown={(e) => { if (e.key === 'Enter') setFlipped(f => !f); }}>
-                  <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 1px 0 var(--rule), 0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
+                  <div className="lm-face front lm-solid" style={{ borderRadius:24, padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
                     <span style={{ position:'absolute', top:20, left:24, fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--ink-soft)' }}>正面</span>
                     <h2 className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(44px,11vw,84px)', fontWeight: isJaCard ? 600 : 500, letterSpacing:'-.02em', margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{card.word}</h2>
                     <div style={{ marginTop:28, display:'flex', gap:10, alignItems:'center' }}>
                       <button onClick={(e) => { e.stopPropagation(); speak(card.word, card.lang, card.id); }} className="lm-btn" aria-label="發音"
-                        style={{ display:'inline-flex', alignItems:'center', gap:8, color: speakingId === card.id ? 'var(--paper)' : 'var(--accent)', background: speakingId === card.id ? 'var(--accent)' : 'transparent', border:'1px solid var(--accent)', borderRadius:999, padding:'8px 18px', fontSize:13 }}>
+                        style={{ display:'inline-flex', alignItems:'center', gap:8, color: speakingId === card.id ? '#fff' : 'var(--accent)', background: speakingId === card.id ? 'var(--accent)' : 'rgba(232,132,60,.08)', border:'1px solid var(--accent)', borderRadius:999, padding:'8px 18px', fontSize:13 }}>
                         <IcVolume size={15} /> 發音
                       </button>
                       {isJaCard && (
                         <button onClick={(e) => { e.stopPropagation(); speakHQ(card.word, card.id); }} className="lm-btn" aria-label="高品質發音"
-                          style={{ display:'inline-flex', alignItems:'center', gap:6, color:'var(--ink-soft)', background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:999, padding:'8px 14px', fontSize:12 }}>
+                          style={{ display:'inline-flex', alignItems:'center', gap:6, color:'var(--ink-soft)', background:'rgba(255,255,255,.5)', border:'1px solid var(--rule)', borderRadius:999, padding:'8px 14px', fontSize:12 }}>
                           {hqLoadingId===card.id ? <span className="lm-dot" /> : '✨'} 高品質
                         </button>
                       )}
                     </div>
                     <span className="lm-serif" style={{ position:'absolute', bottom:18, fontStyle:'italic', fontSize:12, color:'var(--ink-soft)', textAlign:'center', width:'100%', left:0 }}>點一下翻面　·　左右滑切換</span>
                   </div>
-                  <div className="lm-face back lm-hide-scroll" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', overflowY:'auto' }}>
+                  <div className="lm-face back lm-solid lm-hide-scroll" style={{ borderRadius:24, padding:'32px 28px', overflowY:'auto' }}>
                     <span style={{ position:'absolute', top:20, left:24, fontSize:11, letterSpacing:'.2em', textTransform:'uppercase', color:'var(--accent)' }}>背面</span>
                     <div style={{ marginTop:24, display:'flex', alignItems:'baseline', gap:12, flexWrap:'wrap' }}>
                       <span className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(24px,5vw,34px)', fontWeight: isJaCard ? 600 : 500 }}>{card.word}</span>
@@ -1026,7 +1070,7 @@ ${levelInstr}
                     <div style={{ height:1, background:'var(--rule)', marginBottom:20 }} />
                     <div style={{ display:'flex', gap:14, alignItems:'flex-start' }}>
                       <button onClick={(e) => { e.stopPropagation(); speak(card.sentence, card.lang, `${card.id}-s`); }} className="lm-btn" aria-label="播放例句"
-                        style={{ flexShrink:0, width:34, height:34, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center', marginTop:2 }}><IcVolume size={14} /></button>
+                        style={{ flexShrink:0, width:34, height:34, borderRadius:'50%', background:'var(--accent)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', marginTop:2 }}><IcVolume size={14} /></button>
                       <div>
                         <p className={isJaCard ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(17px,3vw,20px)', lineHeight:1.6, margin:0 }}>{card.sentence}</p>
                         {card.sentenceReading && <p style={{ fontSize:13, color:'var(--ink-soft)', fontStyle:'italic', margin:'8px 0 0' }}>{card.sentenceReading}</p>}
@@ -1048,9 +1092,9 @@ ${levelInstr}
                     style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink)', fontSize:14, opacity: currentIndex === 0 ? 0.25 : 1 }}><IcLeft size={20} /> 上一張</button>
                   <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'center' }}>
                     <button onClick={generateStoryFromAI} className="lm-btn"
-                      style={{ display:'flex', alignItems:'center', gap:8, background:'transparent', color:'var(--ink)', border:'1px solid var(--ink)', padding:'10px 18px', borderRadius:2, fontSize:13 }}><IcBook size={15} /> 寫故事</button>
+                      style={{ display:'flex', alignItems:'center', gap:8, background:'rgba(255,255,255,.5)', color:'var(--ink)', border:'1px solid var(--rule)', padding:'10px 18px', borderRadius:999, fontSize:13 }}><IcBook size={15} /> 寫故事</button>
                     <button onClick={() => loadVocab(activeCategory, true)} className="lm-btn"
-                      style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'11px 20px', borderRadius:2, fontSize:13, letterSpacing:'.04em' }}><IcSparkles size={15} /> AI 生新字</button>
+                      style={{ display:'flex', alignItems:'center', gap:8, background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', color:'#fff', padding:'11px 20px', borderRadius:999, fontSize:13, letterSpacing:'.04em', boxShadow:'0 4px 14px rgba(210,104,38,.35), inset 0 1px 2px rgba(255,255,255,.5)' }}><IcSparkles size={15} /> AI 生新字</button>
                   </div>
                   <button onClick={() => goTo(1)} disabled={currentIndex === vocabList.length - 1} className="lm-btn" aria-label="下一張"
                     style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink)', fontSize:14, opacity: currentIndex === vocabList.length - 1 ? 0.25 : 1 }}>下一張 <IcRight size={20} /></button>
@@ -1058,7 +1102,7 @@ ${levelInstr}
               ) : (
                 <>
                   <button onClick={() => setShowStoryView(false)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink)', fontSize:14 }}><IcArrowLeft size={18} /> 返回字卡</button>
-                  <button onClick={() => loadVocab(activeCategory, true)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:8, background:'var(--ink)', color:'var(--paper)', padding:'11px 22px', borderRadius:2, fontSize:13 }}><IcRefresh size={15} /> 換一批</button>
+                  <button onClick={() => loadVocab(activeCategory, true)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:8, background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', color:'#fff', padding:'11px 22px', borderRadius:999, fontSize:13, boxShadow:'0 4px 14px rgba(210,104,38,.35)' }}><IcRefresh size={15} /> 換一批</button>
                 </>
               )}
             </div>
@@ -1068,7 +1112,7 @@ ${levelInstr}
 
       {/* 對話練習介面 */}
       {activeScene && (
-        <div style={{ position:'fixed', inset:0, zIndex:60, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
+        <div style={{ position:'fixed', inset:0, zIndex:60, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
           <div className="lm-paper-texture" />
 
           {/* 頂列 */}
@@ -1086,11 +1130,11 @@ ${levelInstr}
           {/* 開關列 */}
           <div style={{ position:'relative', zIndex:10, display:'flex', gap:8, padding:'10px clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0, flexWrap:'wrap' }}>
             <button onClick={() => setShowCorrection(s => !s)} className="lm-btn"
-              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showCorrection ? 'var(--accent)' : 'var(--rule)'), color: showCorrection ? 'var(--accent)' : 'var(--ink-soft)', background: showCorrection ? 'rgba(46,58,102,.06)' : 'transparent' }}>
+              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showCorrection ? 'var(--accent)' : 'var(--rule)'), color: showCorrection ? 'var(--accent)' : 'var(--ink-soft)', background: showCorrection ? 'rgba(232,132,60,.1)' : 'transparent' }}>
               ✎ 糾錯 {showCorrection ? '開' : '關'}
             </button>
             <button onClick={() => setShowTranslation(s => !s)} className="lm-btn"
-              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showTranslation ? 'var(--accent)' : 'var(--rule)'), color: showTranslation ? 'var(--accent)' : 'var(--ink-soft)', background: showTranslation ? 'rgba(46,58,102,.06)' : 'transparent' }}>
+              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showTranslation ? 'var(--accent)' : 'var(--rule)'), color: showTranslation ? 'var(--accent)' : 'var(--ink-soft)', background: showTranslation ? 'rgba(232,132,60,.1)' : 'transparent' }}>
               中 翻譯 {showTranslation ? '開' : '關'}
             </button>
           </div>
@@ -1101,7 +1145,7 @@ ${levelInstr}
               m.role === 'model' ? (
                 <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-start' }} className="lm-rise">
                   <div style={{ fontSize:10, letterSpacing:'.15em', textTransform:'uppercase', color:'var(--ink-soft)', marginBottom:5 }}>{activeScene.role}</div>
-                  <div style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:'3px 16px 16px 16px', padding:'14px 18px' }}>
+                  <div style={{ background:'rgba(255,255,255,.55)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', border:'1px solid rgba(255,255,255,.7)', borderRadius:'3px 18px 18px 18px', padding:'14px 18px', boxShadow:'0 4px 16px rgba(140,120,100,.1)' }}>
                     <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
                       <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(16px,3vw,19px)', lineHeight:1.6, margin:0, flex:1, color: m.isError ? '#A35' : 'var(--ink)' }}>{m.text}</p>
                       {!m.isError && (
@@ -1116,7 +1160,7 @@ ${levelInstr}
                 </div>
               ) : (
                 <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-end' }} className="lm-rise">
-                  <div style={{ background:'var(--ink)', borderRadius:'16px 3px 16px 16px', padding:'12px 16px' }}>
+                  <div style={{ background:'linear-gradient(135deg, #4a3322, #2a2018)', borderRadius:'18px 3px 18px 18px', padding:'12px 16px', boxShadow:'0 4px 14px rgba(74,51,34,.25)' }}>
                     {/* 日文版本（若使用者打中文，這裡顯示對應日文；打日文則顯示修正後的句子） */}
                     {m.target && m.target !== m.text ? (
                       <>
@@ -1140,7 +1184,7 @@ ${levelInstr}
                     )}
                   </div>
                   {showCorrection && m.correction && (
-                    <div style={{ marginTop:6, background:'rgba(46,58,102,.06)', border:'1px solid var(--accent-soft)', borderRadius:10, padding:'10px 14px' }}>
+                    <div style={{ marginTop:6, background:'rgba(232,132,60,.08)', border:'1px solid var(--accent-soft)', borderRadius:12, padding:'10px 14px' }}>
                       <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--accent)', fontWeight:600, marginBottom:4 }}>✎ 小老師</div>
                       <p style={{ fontSize:13, lineHeight:1.6, margin:0, color:'var(--ink)' }}>{m.correction}</p>
                     </div>
@@ -1167,9 +1211,9 @@ ${levelInstr}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
               placeholder={isListening ? '聽取中…請開始說話' : (activeScene.lang === 'ja-JP' ? '打日文直接對話／打中文教你怎麼說' : 'Type English to chat / type Chinese to learn how')}
               rows={1} className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'}
-              style={{ flex:1, resize:'none', maxHeight:120, background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:18, padding:'12px 16px', fontSize:16, color:'var(--ink)', outline:'none', lineHeight:1.5, fontFamily:'inherit' }} />
+              style={{ flex:1, resize:'none', maxHeight:120, background:'rgba(255,255,255,.6)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', border:'1px solid rgba(255,255,255,.75)', borderRadius:18, padding:'12px 16px', fontSize:16, color:'var(--ink)', outline:'none', lineHeight:1.5, fontFamily:'inherit', boxShadow:'inset 0 1px 2px rgba(255,255,255,.6)' }} />
             <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading} className="lm-btn"
-              style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center', opacity: (!chatInput.trim()||chatLoading) ? 0.4 : 1 }} aria-label="送出">
+              style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', opacity: (!chatInput.trim()||chatLoading) ? 0.4 : 1, boxShadow:'0 4px 14px rgba(210,104,38,.4), inset 0 1px 2px rgba(255,255,255,.5)' }} aria-label="送出">
               <IcRight size={20} />
             </button>
           </div>
@@ -1178,7 +1222,7 @@ ${levelInstr}
 
       {/* 新聞介面 */}
       {showNews && (
-        <div style={{ position:'fixed', inset:0, zIndex:55, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
+        <div style={{ position:'fixed', inset:0, zIndex:55, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
           <div className="lm-paper-texture" />
 
           {/* 頂列 */}
@@ -1246,7 +1290,7 @@ ${levelInstr}
                         </div>
                         <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
                           {activeArticle.processed.words.map((w, i) => (
-                            <div key={i} style={{ display:'flex', alignItems:'baseline', gap:12, padding:'10px 14px', background:'var(--paper-2)', borderRadius:6, border:'1px solid var(--rule)' }}>
+                            <div key={i} style={{ display:'flex', alignItems:'baseline', gap:12, padding:'12px 16px', background:'rgba(255,255,255,.5)', borderRadius:14, border:'1px solid rgba(255,255,255,.7)', boxShadow:'0 2px 10px rgba(140,120,100,.06)' }}>
                               <span className="lm-jp-serif" style={{ fontSize:17, fontWeight:600, flexShrink:0 }}>{w.word}</span>
                               {w.reading && <span style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', flexShrink:0 }}>{w.reading}</span>}
                               <span className="lm-serif" style={{ fontSize:14, color:'var(--ink)', flex:1, textAlign:'right' }}>{w.meaning}</span>
@@ -1274,18 +1318,18 @@ ${levelInstr}
               </div>
             ) : (
               /* 新聞清單 */
-              <div style={{ maxWidth:680, margin:'0 auto', display:'flex', flexDirection:'column' }}>
+              <div style={{ maxWidth:680, margin:'0 auto', display:'flex', flexDirection:'column', gap:10 }}>
                 {newsItems.map((item, i) => (
-                  <button key={i} onClick={() => openArticle(item)} className="lm-btn"
-                    style={{ textAlign:'left', padding:'18px 4px', borderBottom:'1px solid var(--rule)', display:'flex', gap:14, alignItems:'flex-start', transition:'padding .2s' }}
-                    onMouseEnter={(e)=>{ e.currentTarget.style.paddingLeft='12px'; }}
-                    onMouseLeave={(e)=>{ e.currentTarget.style.paddingLeft='4px'; }}>
-                    <span className="lm-serif" style={{ fontSize:14, color:'var(--accent)', flexShrink:0, marginTop:3, width:24 }}>{String(i+1).padStart(2,'0')}</span>
+                  <button key={i} onClick={() => openArticle(item)} className="lm-btn lm-crystal"
+                    style={{ textAlign:'left', padding:'18px', borderRadius:18, display:'flex', gap:14, alignItems:'flex-start', transition:'transform .2s' }}
+                    onMouseEnter={(e)=>{ e.currentTarget.style.transform='translateY(-2px)'; }}
+                    onMouseLeave={(e)=>{ e.currentTarget.style.transform='none'; }}>
+                    <span style={{ fontSize:14, fontWeight:700, color:'var(--accent)', flexShrink:0, marginTop:3, width:24 }}>{String(i+1).padStart(2,'0')}</span>
                     <div style={{ flex:1, minWidth:0 }}>
-                      <p className="lm-jp-serif" style={{ fontSize:'clamp(15px,3vw,18px)', fontWeight:500, lineHeight:1.5, margin:0 }}>{item.title}</p>
+                      <p className="lm-jp-serif" style={{ fontSize:'clamp(15px,3vw,18px)', fontWeight:600, lineHeight:1.5, margin:0, color:'var(--ink)' }}>{item.title}</p>
                       {item.description && <p style={{ fontSize:13, color:'var(--ink-soft)', lineHeight:1.6, margin:'6px 0 0', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{item.description}</p>}
                     </div>
-                    <IcRight size={16} style={{ color:'var(--ink-soft)', flexShrink:0, marginTop:4 }} />
+                    <IcRight size={16} style={{ color:'var(--accent)', flexShrink:0, marginTop:4 }} />
                   </button>
                 ))}
               </div>
@@ -1300,7 +1344,7 @@ ${levelInstr}
         const rc = reviewQueue[reviewIndex];
         const isJa = rc?.lang === 'ja-JP';
         return (
-          <div style={{ position:'fixed', inset:0, zIndex:58, background:'var(--paper)', display:'flex', flexDirection:'column' }} className="lm-rise">
+          <div style={{ position:'fixed', inset:0, zIndex:58, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
             <div className="lm-paper-texture" />
 
             {/* 頂列 */}
@@ -1341,12 +1385,12 @@ ${levelInstr}
                   <div className={`lm-flip ${reviewFlipped ? 'is-flipped' : ''}`}
                     style={{ minHeight:'clamp(320px,48vh,420px)', cursor:'pointer' }} role="button" tabIndex={0}>
                     {/* 正面：只有字 */}
-                    <div className="lm-face front" style={{ background:'var(--paper)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
+                    <div className="lm-face front lm-solid" style={{ borderRadius:24, padding:'40px 32px', justifyContent:'center', alignItems:'center', textAlign:'center' }}>
                       <h2 className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(40px,10vw,72px)', fontWeight: isJa ? 600 : 500, margin:0, lineHeight:1.05, wordBreak:'break-word' }}>{rc.word}</h2>
                       <span className="lm-serif" style={{ position:'absolute', bottom:18, fontStyle:'italic', fontSize:12, color:'var(--ink-soft)', textAlign:'center', width:'100%', left:0 }}>點一下看答案</span>
                     </div>
                     {/* 背面 */}
-                    <div className="lm-face back" style={{ background:'var(--paper-2)', border:'1px solid var(--rule)', borderRadius:3, boxShadow:'0 18px 40px -28px rgba(40,40,30,.4)', padding:'32px 28px', justifyContent:'center' }}>
+                    <div className="lm-face back lm-solid" style={{ borderRadius:24, padding:'32px 28px', justifyContent:'center' }}>
                       <div style={{ display:'flex', alignItems:'baseline', gap:12, flexWrap:'wrap', marginBottom:8 }}>
                         <span className={isJa ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(24px,5vw,34px)', fontWeight: isJa ? 600 : 500 }}>{rc.word}</span>
                         {rc.reading && <span style={{ fontSize:14, color:'var(--ink-soft)', fontStyle:'italic' }}>{rc.reading}</span>}
