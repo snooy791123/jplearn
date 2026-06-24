@@ -15,31 +15,46 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  // 收集多組 API key（額度用完或失效時自動換下一把）
+  const apiKeys = [
+    process.env.GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+    process.env.GEMINI_API_KEY_4
+  ].filter(Boolean);
+  if (apiKeys.length === 0) {
     return res.status(500).json({ error: 'Server missing GEMINI_API_KEY' });
   }
+  // 給 TTS 等用：第一把可用的 key
+  const apiKey = apiKeys[0];
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-
-  // 共用的帶重試送出
+  // 共用的送出：每把 key 各重試，失敗換下一把
   async function callGemini(payload) {
-    let retries = 3, delay = 800, lastErr;
-    while (retries > 0) {
-      try {
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (!r.ok) throw new Error(`Gemini error: ${r.status}`);
-        const data = await r.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) throw new Error('Empty response');
-        return text;
-      } catch (err) {
-        lastErr = err; retries--;
-        if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
+    let lastErr;
+    for (const key of apiKeys) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
+      let retries = 2, delay = 700;
+      while (retries > 0) {
+        try {
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          // 429(額度用完) / 403(key 失效) → 不重試，直接換下一把 key
+          if (r.status === 429 || r.status === 403) throw new Error(`KEY_EXHAUSTED ${r.status}`);
+          if (!r.ok) throw new Error(`Gemini error: ${r.status}`);
+          const data = await r.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!text) throw new Error('Empty response');
+          return text;
+        } catch (err) {
+          lastErr = err;
+          // 額度/權限問題 → 立刻跳出去換下一把 key
+          if (String(err.message).startsWith('KEY_EXHAUSTED')) break;
+          retries--;
+          if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
+        }
       }
     }
     throw lastErr;
@@ -53,7 +68,6 @@ export default async function handler(req, res) {
     if (mode === 'tts') {
       const { text, voice } = body;
       if (!text) return res.status(400).json({ error: 'Missing text' });
-      const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${apiKey}`;
       const payload = {
         contents: [{ parts: [{ text }] }],
         generationConfig: {
@@ -63,24 +77,30 @@ export default async function handler(req, res) {
           }
         }
       };
-      // Preview 模型偶爾會回文字而非音訊導致 500，故帶重試
-      let retries = 3, delay = 700, lastErr;
-      while (retries > 0) {
-        try {
-          const r = await fetch(ttsUrl, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          if (!r.ok) throw new Error('TTS ' + r.status);
-          const data = await r.json();
-          const part = data.candidates?.[0]?.content?.parts?.[0];
-          const audio = part?.inlineData?.data;
-          if (!audio) throw new Error('No audio');
-          // 回傳 base64 PCM 與取樣率（前端組 WAV）
-          return res.status(200).json({ ok: true, audio, mimeType: part.inlineData.mimeType || 'audio/L16;rate=24000' });
-        } catch (err) {
-          lastErr = err; retries--;
-          if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
+      let lastErr;
+      // 每把 key 各試幾次，失敗換下一把
+      for (const key of apiKeys) {
+        const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key=${key}`;
+        let retries = 2, delay = 700;
+        while (retries > 0) {
+          try {
+            const r = await fetch(ttsUrl, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (r.status === 429 || r.status === 403) throw new Error(`KEY_EXHAUSTED ${r.status}`);
+            if (!r.ok) throw new Error('TTS ' + r.status);
+            const data = await r.json();
+            const part = data.candidates?.[0]?.content?.parts?.[0];
+            const audio = part?.inlineData?.data;
+            if (!audio) throw new Error('No audio');
+            return res.status(200).json({ ok: true, audio, mimeType: part.inlineData.mimeType || 'audio/L16;rate=24000' });
+          } catch (err) {
+            lastErr = err;
+            if (String(err.message).startsWith('KEY_EXHAUSTED')) break;
+            retries--;
+            if (retries > 0) { await new Promise((rs) => setTimeout(rs, delay)); delay *= 2; }
+          }
         }
       }
       return res.status(502).json({ ok: false, error: 'TTS failed: ' + String(lastErr) });
