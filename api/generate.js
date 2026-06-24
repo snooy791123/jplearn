@@ -8,7 +8,7 @@
 //   1. 單字/故事生成（mode 省略或 'json'）：帶 promptText + responseSchema，回傳結構化 JSON
 //   2. 對話練習（mode 'chat'）：帶 systemPrompt + history，回傳對話 JSON（角色回覆 + 糾錯）
 
-const GEMINI_MODEL = 'gemini-3.5-flash';
+const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
