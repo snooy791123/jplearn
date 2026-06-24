@@ -122,16 +122,45 @@ export default async function handler(req, res) {
 
     // ---------- 對話模式 ----------
     if (mode === 'chat') {
+      // 第一階段（快）：只生成 AI 回覆本身 + 讀音 + 翻譯，讓對話即時顯示
       const { systemPrompt, history } = body;
       if (!systemPrompt || !Array.isArray(history)) {
         return res.status(400).json({ error: 'Missing systemPrompt or history' });
       }
-      // 把前端的 [{role:'user'|'model', text}] 轉成 Gemini 的 contents 格式
       const contents = history.map((m) => ({
         role: m.role === 'model' ? 'model' : 'user',
         parts: [{ text: m.text }]
       }));
+      const payload = {
+        contents,
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              reply: { type: 'STRING', description: '角色用目標語言的自然回覆，簡短、難度適中、推進劇情' },
+              replyReading: { type: 'STRING', description: '回覆的讀音（日文假名/羅馬拼音，英文音標）' },
+              replyTranslation: { type: 'STRING', description: '回覆的繁體中文翻譯' }
+            },
+            required: ['reply', 'replyTranslation']
+          }
+        }
+      };
+      const text = await callGemini(payload);
+      return res.status(200).json({ ok: true, text });
+    }
 
+    if (mode === 'chatDetail') {
+      // 第二階段（背景補）：針對使用者「最後一句」生成 修正/讀音/意思/糾錯
+      const { systemPrompt, history } = body;
+      if (!systemPrompt || !Array.isArray(history)) {
+        return res.status(400).json({ error: 'Missing systemPrompt or history' });
+      }
+      const contents = history.map((m) => ({
+        role: m.role === 'model' ? 'model' : 'user',
+        parts: [{ text: m.text }]
+      }));
       const payload = {
         contents,
         systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -143,12 +172,9 @@ export default async function handler(req, res) {
               userTarget: { type: 'STRING', description: '使用者上一句「翻成目標語言」的自然說法。若使用者本來就用目標語言講且正確，原樣放這；若使用者打的是中文，這裡放對應的目標語言說法。沒有使用者發言則空字串。' },
               userReading: { type: 'STRING', description: 'userTarget 的讀音（日文假名/羅馬拼音，英文音標）。沒有則空字串。' },
               userMeaning: { type: 'STRING', description: '使用者那句話的繁體中文意思。沒有則空字串。' },
-              reply: { type: 'STRING', description: '角色用目標語言的自然回覆' },
-              replyReading: { type: 'STRING', description: '回覆的讀音（日文假名/羅馬拼音，英文音標）' },
-              replyTranslation: { type: 'STRING', description: '回覆的繁體中文翻譯' },
               correction: { type: 'STRING', description: '若使用者用目標語言但有錯，指出並給更道地說法；若使用者打中文，這裡簡短說明「你想說的可以這樣講」；都沒問題則空字串' }
             },
-            required: ['reply', 'replyTranslation']
+            required: []
           }
         }
       };
