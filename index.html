@@ -1262,28 +1262,30 @@ ${levelInstr}
               ) : (
                 <div key={i} style={{ maxWidth:'85%', alignSelf:'flex-end' }} className="lm-rise">
                   <div style={{ background:'linear-gradient(135deg, #4a3322, #2a2018)', borderRadius:'18px 3px 18px 18px', padding:'12px 16px', boxShadow:'0 4px 14px rgba(74,51,34,.25)' }}>
-                    {/* 日文版本（若使用者打中文，這裡顯示對應日文；打日文則顯示修正後的句子） */}
-                    {m.target && m.target !== m.text ? (
-                      <>
-                        <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
-                          <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)', flex:1 }}>{m.target}</p>
-                          <button onClick={() => speak(m.target, activeScene.lang, 'u-'+i)} className="lm-btn" aria-label="播放"
-                            style={{ flexShrink:0, width:28, height:28, borderRadius:'50%', background:'rgba(255,255,255,.18)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={12} /></button>
-                        </div>
-                        {m.reading && <p style={{ fontSize:11, color:'rgba(247,244,237,.6)', fontStyle:'italic', margin:'6px 0 0' }}>{m.reading}</p>}
-                      </>
-                    ) : (
-                      <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
-                        <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)', flex:1 }}>{m.text}</p>
-                        {m.target && <button onClick={() => speak(m.target, activeScene.lang, 'u-'+i)} className="lm-btn" aria-label="播放"
-                          style={{ flexShrink:0, width:28, height:28, borderRadius:'50%', background:'rgba(255,255,255,.18)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={12} /></button>}
-                      </div>
-                    )}
-                    {/* 中文釋義 */}
+                    <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
+                      <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(15px,3vw,18px)', lineHeight:1.5, margin:0, color:'var(--paper)', flex:1 }}>{m.text}</p>
+                      {m.target && m.target === m.text && (
+                        <button onClick={() => speak(m.text, activeScene.lang, 'u-'+i)} className="lm-btn" aria-label="播放"
+                          style={{ flexShrink:0, width:28, height:28, borderRadius:'50%', background:'rgba(255,255,255,.18)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={12} /></button>
+                      )}
+                    </div>
+                    {/* 中文釋義（打日文時顯示意思） */}
                     {showTranslation && m.meaning && (
                       <p className="lm-serif" style={{ fontSize:13, color:'rgba(247,244,237,.7)', margin:'8px 0 0', paddingTop:8, borderTop:'1px solid rgba(255,255,255,.15)' }}>{m.meaning}</p>
                     )}
                   </div>
+                  {/* 你打中文時 → 明確顯示「日文這樣說」教學卡 */}
+                  {m.target && m.target !== m.text && (
+                    <div style={{ marginTop:6, background:'rgba(232,132,60,.1)', border:'1px solid var(--accent-soft)', borderRadius:12, padding:'12px 14px' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--accent)', fontWeight:600, marginBottom:6 }}>💬 日文這樣說</div>
+                      <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
+                        <p className="lm-jp-serif" style={{ fontSize:'clamp(16px,3vw,19px)', lineHeight:1.5, margin:0, color:'var(--ink)', fontWeight:500, flex:1 }}>{m.target}</p>
+                        <button onClick={() => speak(m.target, activeScene.lang, 'ut-'+i)} className="lm-btn" aria-label="播放"
+                          style={{ flexShrink:0, width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={13} /></button>
+                      </div>
+                      {m.reading && <p style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', margin:'6px 0 0' }}>{m.reading}</p>}
+                    </div>
+                  )}
                   {showCorrection && m.correction && (
                     <div style={{ marginTop:6, background:'rgba(232,132,60,.08)', border:'1px solid var(--accent-soft)', borderRadius:12, padding:'10px 14px' }}>
                       <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--accent)', fontWeight:600, marginBottom:4 }}>✎ 小老師</div>
