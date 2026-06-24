@@ -174,7 +174,7 @@ export default async function handler(req, res) {
               userMeaning: { type: 'STRING', description: '使用者那句話的繁體中文意思。沒有則空字串。' },
               correction: { type: 'STRING', description: '若使用者用目標語言但有錯，指出並給更道地說法；若使用者打中文，這裡簡短說明「你想說的可以這樣講」；都沒問題則空字串' }
             },
-            required: []
+            required: ['userTarget']
           }
         }
       };
