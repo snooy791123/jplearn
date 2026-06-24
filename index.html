@@ -868,6 +868,7 @@ ${levelInstr}
     const history = nextMsgs.map((m) => ({ role: m.role, text: m.text }));
 
     try {
+      // 第一階段（快）：先拿 AI 回覆顯示出來
       const r = await fetch(API_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -877,27 +878,49 @@ ${levelInstr}
       const data = await r.json();
       if (!data.ok || !data.text) throw new Error('empty');
       const parsed = safeParseJSON(data.text);
-      setMessages((prev) => {
-        const copy = [...prev];
-        // 把日文版、讀音、釋義、糾錯掛到剛剛那則 user 訊息上
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].role === 'user') {
-            copy[i] = {
-              ...copy[i],
-              target: parsed.userTarget || copy[i].text,
-              reading: parsed.userReading || '',
-              meaning: parsed.userMeaning || '',
-              correction: parsed.correction || ''
-            };
-            break;
-          }
-        }
-        copy.push({ role: 'model', text: parsed.reply, reading: parsed.replyReading || '', translation: parsed.replyTranslation || '', correction: '' });
-        return copy;
-      });
+      // 立刻顯示 AI 回覆（user 那句的修正稍後補）
+      setMessages((prev) => [...prev, {
+        role: 'model', text: parsed.reply,
+        reading: parsed.replyReading || '', translation: parsed.replyTranslation || '',
+        correction: '', detailPending: true
+      }]);
+      setChatLoading(false);
+
+      // 第二階段（背景）：補使用者那句的 修正/讀音/意思/糾錯，不擋畫面
+      fetch(API_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'chatDetail', systemPrompt, history })
+      })
+        .then((res) => res.ok ? res.json() : null)
+        .then((dd) => {
+          if (!dd || !dd.ok || !dd.text) return;
+          const detail = safeParseJSON(dd.text);
+          setMessages((prev) => {
+            const copy = [...prev];
+            // 找最後一則 user 補上細節
+            for (let i = copy.length - 1; i >= 0; i--) {
+              if (copy[i].role === 'user') {
+                copy[i] = {
+                  ...copy[i],
+                  target: detail.userTarget || copy[i].text,
+                  reading: detail.userReading || '',
+                  meaning: detail.userMeaning || '',
+                  correction: detail.correction || ''
+                };
+                break;
+              }
+            }
+            // 清掉 AI 回覆的 pending 標記
+            for (let i = copy.length - 1; i >= 0; i--) {
+              if (copy[i].role === 'model' && copy[i].detailPending) { copy[i] = { ...copy[i], detailPending: false }; break; }
+            }
+            return copy;
+          });
+        })
+        .catch(() => {}); // 補充失敗不影響對話本身
     } catch {
       setMessages((prev) => [...prev, { role: 'model', text: '（連線出了點問題，請再說一次）', reading: '', translation: '', correction: '', isError: true }]);
-    } finally {
       setChatLoading(false);
     }
   };
@@ -1187,7 +1210,9 @@ ${levelInstr}
           {/* 頂列 */}
           <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(16px,3vw,24px) clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
             <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
-              <span style={{ fontSize:26, flexShrink:0 }}>{activeScene.icon}</span>
+              <span style={{ flexShrink:0, width:38, height:38, borderRadius:11, display:'flex', alignItems:'center', justifyContent:'center', background:'linear-gradient(135deg, rgba(244,168,87,.25), rgba(232,132,60,.15))', color:'var(--accent)', border:'1px solid rgba(255,255,255,.6)' }}>
+                {(() => { const Ic = SCENE_ICONS[activeScene.id] || IcChat; return <Ic size={19} />; })()}
+              </span>
               <div style={{ minWidth:0 }}>
                 <div className="lm-jp-serif" style={{ fontSize:'clamp(16px,2.5vw,20px)', fontWeight:500 }}>{activeScene.title}</div>
                 <div style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)' }}>對方：{activeScene.role}</div>
@@ -1218,9 +1243,16 @@ ${levelInstr}
                     <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
                       <p className={activeScene.lang==='ja-JP' ? 'lm-jp-serif' : 'lm-serif'} style={{ fontSize:'clamp(16px,3vw,19px)', lineHeight:1.6, margin:0, flex:1, color: m.isError ? '#A35' : 'var(--ink)' }}>{m.text}</p>
                       {!m.isError && (
-                        <button onClick={() => activeScene.lang==='ja-JP' ? speakHQ(m.text, 'chat-'+i) : speak(m.text, activeScene.lang, 'chat-'+i)} className="lm-btn" aria-label="播放"
-                          style={{ flexShrink:0, width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'var(--paper)', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                          {hqLoadingId==='chat-'+i ? <span className="lm-dot" style={{ background:'var(--paper)' }} /> : <IcVolume size={13} />}</button>
+                        <div style={{ display:'flex', gap:6, flexShrink:0 }}>
+                          <button onClick={() => speak(m.text, activeScene.lang, 'chat-'+i)} className="lm-btn" aria-label="播放"
+                            style={{ width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                            <IcVolume size={13} /></button>
+                          {activeScene.lang==='ja-JP' && (
+                            <button onClick={() => speakHQ(m.text, 'chat-'+i)} className="lm-btn" aria-label="高品質播放"
+                              style={{ width:30, height:30, borderRadius:'50%', background:'rgba(255,255,255,.6)', border:'1px solid var(--rule)', color:'var(--accent)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11 }}>
+                              {hqLoadingId==='chat-'+i ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : '✨'}</button>
+                          )}
+                        </div>
                       )}
                     </div>
                     {m.reading && <p style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', margin:'8px 0 0' }}>{m.reading}</p>}
