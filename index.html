@@ -40,16 +40,16 @@
   /* 水晶玻璃：高透明 + 亮邊 + 頂部光澤 + 內發光 + 柔和陰影 */
   .lm-crystal {
     position:relative;
-    background: linear-gradient(135deg, rgba(255,255,255,0.5), rgba(255,255,255,0.28));
-    backdrop-filter: blur(12px) saturate(130%);
-    -webkit-backdrop-filter: blur(12px) saturate(130%);
-    border: 1px solid rgba(255,255,255,0.85);
+    background: linear-gradient(135deg, rgba(255,255,255,0.42), rgba(255,255,255,0.2));
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.7);
     box-shadow:
-      0 10px 30px rgba(140,120,100,0.16),
-      0 2px 6px rgba(140,120,100,0.08),
-      inset 0 1px 1px rgba(255,255,255,0.95),
-      inset 0 -2px 6px rgba(255,255,255,0.5),
-      inset 0 0 20px rgba(255,255,255,0.22);
+      0 8px 32px rgba(140,120,100,0.14),
+      0 2px 6px rgba(140,120,100,0.06),
+      inset 0 0 0 1px rgba(255,255,255,0.25),
+      inset 0 1px 1px rgba(255,255,255,0.9),
+      inset 0 -2px 8px rgba(255,255,255,0.4);
   }
   .lm-crystal::before {
     content:''; position:absolute; top:0; left:0; right:0; height:42%;
@@ -78,6 +78,24 @@
   @keyframes lm-blink { 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
   .lm-dot { width:7px; height:7px; border-radius:50%; background:var(--ink-soft); display:inline-block; animation:lm-blink 1.2s infinite; }
   @keyframes lm-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(210,104,38,.4);} 50%{box-shadow:0 0 0 8px rgba(210,104,38,0);} }
+  /* 漂浮 3D 漸層球（固定在最底層，所有畫面共用） */
+  .lm-spheres { position:fixed; inset:0; overflow:hidden; pointer-events:none; z-index:0; }
+  .lm-sphere { position:absolute; border-radius:50%; }
+  .lm-sphere.s1 { width:260px; height:260px; top:-80px; left:-60px;
+    background:radial-gradient(circle at 30% 30%, #FFE5A0, #F4A857 70%, #E0702A);
+    box-shadow:0 20px 50px rgba(232,132,60,.35); opacity:.8; animation:lm-float1 16s ease-in-out infinite; }
+  .lm-sphere.s2 { width:320px; height:320px; top:55%; right:-90px;
+    background:radial-gradient(circle at 30% 30%, #FBD9BC, #F2A65A 70%, #D87860);
+    box-shadow:0 20px 50px rgba(216,120,96,.3); opacity:.7; animation:lm-float2 20s ease-in-out infinite; }
+  .lm-sphere.s3 { width:90px; height:90px; top:14%; right:12%;
+    background:radial-gradient(circle at 30% 30%, #FFF5D6, #FFD57E);
+    box-shadow:0 12px 28px rgba(255,213,126,.4); opacity:.75; animation:lm-float3 13s ease-in-out infinite; }
+  .lm-sphere.s4 { width:140px; height:140px; bottom:8%; left:8%;
+    background:radial-gradient(circle at 30% 30%, #FBE8D6, #F5C89A);
+    box-shadow:0 14px 32px rgba(245,200,154,.35); opacity:.65; animation:lm-float1 18s ease-in-out infinite reverse; }
+  @keyframes lm-float1 { 0%,100%{transform:translateY(0) rotate(0deg);} 50%{transform:translateY(-26px) rotate(6deg);} }
+  @keyframes lm-float2 { 0%,100%{transform:translateY(0) rotate(0deg);} 50%{transform:translateY(24px) rotate(-5deg);} }
+  @keyframes lm-float3 { 0%,100%{transform:translateY(0) rotate(0deg);} 50%{transform:translateY(-18px) rotate(8deg);} }
   /* 手機優化 */
   .lm-btn { min-height:44px; min-width:44px; touch-action:manipulation; }
   .lm-safe-bottom { padding-bottom:max(env(safe-area-inset-bottom), 16px); }
@@ -96,7 +114,7 @@ const { useState, useEffect } = React;
 const API_ENDPOINT = '/api/generate';
 
 // ⚠️ 部署 Apps Script 後拿到的 Web App 網址貼這裡（留空則只用本機快取，不同步雲端）
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbyI5uUnclfX1JTJLid1PUNPCDSQBgPGPqq0wGQ2dMCXxdqCAXZJw3QL7C0cnZJNnOG81Q/exec';
+const SHEET_API_URL = 'https://docs.google.com/spreadsheets/d/1yw0cPk-ccrRr_nFF49dbQQD4dBBlw_711dQsKlVUM8E/edit?usp=sharing';
 
 const CACHE_PREFIX = 'linguamode:vocab:';
 const CACHE_MIN = 5;
@@ -300,6 +318,37 @@ const callBackend = async (promptText, responseSchema) => {
   if (!data.ok || !data.text) throw new Error(data.error || 'No text');
   return safeParseJSON(data.text);
 };
+
+// 數字跑動動畫（0 → 目標值）
+const AnimatedNumber = ({ value, duration = 900, style, className }) => {
+  const [display, setDisplay] = useState(0);
+  React.useEffect(() => {
+    let raf, start;
+    const target = Number(value) || 0;
+    const step = (ts) => {
+      if (!start) start = ts;
+      const p = Math.min((ts - start) / duration, 1);
+      // ease-out
+      const eased = 1 - Math.pow(1 - p, 3);
+      setDisplay(Math.floor(eased * target));
+      if (p < 1) raf = requestAnimationFrame(step);
+      else setDisplay(target);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration]);
+  return <span style={style} className={className}>{display}</span>;
+};
+
+// 漂浮 3D 漸層球背景（所有畫面共用）
+const Spheres = () => (
+  <div className="lm-spheres" aria-hidden="true">
+    <div className="lm-sphere s1" />
+    <div className="lm-sphere s2" />
+    <div className="lm-sphere s3" />
+    <div className="lm-sphere s4" />
+  </div>
+);
 
 function App() {
   const [activeCategory, setActiveCategory] = useState(null);
@@ -870,7 +919,7 @@ ${levelInstr}
 
   return (
     <div className="lm-root">
-      <div className="lm-paper-texture" />
+      <Spheres />
       {voiceWarn && (
         <div style={{ position:'fixed', top:16, left:'50%', transform:'translateX(-50%)', zIndex:200, maxWidth:'90%',
           background:'var(--ink)', color:'var(--paper)', padding:'12px 18px', borderRadius:8, fontSize:13, lineHeight:1.5,
@@ -900,7 +949,7 @@ ${levelInstr}
           </p>
           {totalStored > 0 && (
             <span style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:13, color:'var(--ink-soft)' }}>
-              <IcDatabase size={14} style={{ color:'var(--accent)' }} /> 字庫已存 <span className="lm-serif" style={{ fontSize:20, color:'var(--accent)', fontWeight:500 }}>{totalStored}</span> 字
+              <IcDatabase size={14} style={{ color:'var(--accent)' }} /> 字庫已存 <AnimatedNumber value={totalStored} className="lm-serif" style={{ fontSize:20, color:'var(--accent)', fontWeight:500 }} /> 字
             </span>
           )}
         </div>
@@ -935,7 +984,7 @@ ${levelInstr}
               </div>
               <span style={{ fontSize:13, color:'var(--ink-soft)', marginTop:2 }}>{cat.title}{cacheCounts[cat.id] > 0 && <span style={{ color:'var(--accent)', marginLeft:8 }}>{cacheCounts[cat.id]}字</span>}</span>
               <span style={{ display:'flex', gap:3, marginTop:12, width:'100%' }}>
-                {[0,1,2,3,4,5].map(s => <span key={s} style={{ height:5, flex:1, borderRadius:3, background: s <= cat.depth ? 'var(--accent)' : 'rgba(150,130,115,.22)' }} />)}
+                {[0,1,2,3,4,5].map(s => <span key={s} style={{ height:5, flex:1, borderRadius:3, background: s <= cat.depth ? 'var(--accent)' : 'rgba(150,130,115,.22)', boxShadow: s <= cat.depth ? '0 0 8px rgba(210,104,38,.5)' : 'none' }} />)}
               </span>
             </button>
           ))}
@@ -1000,7 +1049,7 @@ ${levelInstr}
       </main>
 
       {activeCategory && (
-        <div style={{ position:'fixed', inset:0, zIndex:50, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
+        <div style={{ position:'fixed', inset:0, zIndex:50, background:'linear-gradient(160deg, rgba(244,241,236,.82) 0%, rgba(236,232,225,.85) 100%)', backdropFilter:'blur(40px)', WebkitBackdropFilter:'blur(40px)', display:'flex', flexDirection:'column' }} className="lm-rise">
           <div className="lm-paper-texture" />
           <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(18px,3vw,28px) clamp(20px,5vw,48px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
             <div style={{ display:'flex', alignItems:'baseline', gap:14, minWidth:0 }}>
@@ -1132,7 +1181,7 @@ ${levelInstr}
 
       {/* 對話練習介面 */}
       {activeScene && (
-        <div style={{ position:'fixed', inset:0, zIndex:60, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
+        <div style={{ position:'fixed', inset:0, zIndex:60, background:'linear-gradient(160deg, rgba(244,241,236,.82) 0%, rgba(236,232,225,.85) 100%)', backdropFilter:'blur(40px)', WebkitBackdropFilter:'blur(40px)', display:'flex', flexDirection:'column' }} className="lm-rise">
           <div className="lm-paper-texture" />
 
           {/* 頂列 */}
@@ -1242,7 +1291,7 @@ ${levelInstr}
 
       {/* 新聞介面 */}
       {showNews && (
-        <div style={{ position:'fixed', inset:0, zIndex:55, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
+        <div style={{ position:'fixed', inset:0, zIndex:55, background:'linear-gradient(160deg, rgba(244,241,236,.82) 0%, rgba(236,232,225,.85) 100%)', backdropFilter:'blur(40px)', WebkitBackdropFilter:'blur(40px)', display:'flex', flexDirection:'column' }} className="lm-rise">
           <div className="lm-paper-texture" />
 
           {/* 頂列 */}
@@ -1364,7 +1413,7 @@ ${levelInstr}
         const rc = reviewQueue[reviewIndex];
         const isJa = rc?.lang === 'ja-JP';
         return (
-          <div style={{ position:'fixed', inset:0, zIndex:58, background:'radial-gradient(ellipse at 75% 10%, #FBEFE2 0%, transparent 55%), radial-gradient(ellipse at 15% 88%, #F6EEE6 0%, transparent 55%), linear-gradient(160deg, #F4F1EC 0%, #ECE8E1 100%)', display:'flex', flexDirection:'column' }} className="lm-rise">
+          <div style={{ position:'fixed', inset:0, zIndex:58, background:'linear-gradient(160deg, rgba(244,241,236,.82) 0%, rgba(236,232,225,.85) 100%)', backdropFilter:'blur(40px)', WebkitBackdropFilter:'blur(40px)', display:'flex', flexDirection:'column' }} className="lm-rise">
             <div className="lm-paper-texture" />
 
             {/* 頂列 */}
