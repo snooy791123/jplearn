@@ -114,7 +114,7 @@ const { useState, useEffect } = React;
 const API_ENDPOINT = '/api/generate';
 
 // ⚠️ 部署 Apps Script 後拿到的 Web App 網址貼這裡（留空則只用本機快取，不同步雲端）
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbyI5uUnclfX1JTJLid1PUNPCDSQBgPGPqq0wGQ2dMCXxdqCAXZJw3QL7C0cnZJNnOG81Q/exec';
+const SHEET_API_URL = '';
 
 const CACHE_PREFIX = 'linguamode:vocab:';
 const CACHE_MIN = 5;
@@ -450,6 +450,21 @@ function App() {
   const [showTranslation, setShowTranslation] = useState(true);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = React.useRef(null);
+  // 語音對話模式（開了就用講的來回，AI 回覆會自動唸出、唸完自動再聽）
+  const [voiceMode, setVoiceModeState] = useState(false);
+  const voiceModeRef = React.useRef(false); // 給 callback 讀「當下」的值，避免閉包過期
+  const setVoiceMode = (v) => { voiceModeRef.current = v; setVoiceModeState(v); };
+  // 對話難度：新手（簡單詞彙、放慢語速）／進階（自然道地、正常語速）
+  const [chatDifficulty, setChatDifficultyState] = useState(() => {
+    try { return localStorage.getItem('linguamode:chatDifficulty') || '新手'; } catch { return '新手'; }
+  });
+  const updateChatDifficulty = (v) => { setChatDifficultyState(v); try { localStorage.setItem('linguamode:chatDifficulty', v); } catch {} };
+  // 自訂對話情境
+  const [customSceneTopic, setCustomSceneTopic] = useState('');
+  const [customSceneLang, setCustomSceneLang] = useState('ja-JP');
+  const [customSceneLoading, setCustomSceneLoading] = useState(false);
+  // 對話回顧本（結束對話後顯示這次學到的東西）
+  const [chatReview, setChatReview] = useState(null); // { title, lang, items:[{text,target,reading,meaning,correction}] }
 
   // 新聞 state
   const [showNews, setShowNews] = useState(false);
@@ -644,7 +659,7 @@ function App() {
         || null;
   };
 
-  const speak = (text, lang, id) => {
+  const speak = (text, lang, id, opts) => {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
 
@@ -659,8 +674,8 @@ function App() {
       }
       setSpeakingId(id);
       const u = new SpeechSynthesisUtterance(text);
-      u.voice = voice; u.lang = voice.lang; u.rate = 0.85;
-      u.onend = () => setSpeakingId(null);
+      u.voice = voice; u.lang = voice.lang; u.rate = (opts && opts.rate) || 0.85;
+      u.onend = () => { setSpeakingId(null); if (opts && opts.onEnd) opts.onEnd(); };
       u.onerror = () => setSpeakingId(null);
       window.speechSynthesis.speak(u);
     };
@@ -707,11 +722,69 @@ function App() {
     setActiveScene(scene);
     setMessages([{ role: 'model', text: scene.opener, reading: '', translation: '', correction: '' }]);
     setChatInput('');
+    if (voiceModeRef.current) {
+      const rate = chatDifficulty === '進階' ? 1.0 : 0.78;
+      setTimeout(() => {
+        speak(scene.opener, scene.lang, 'chat-0', { rate, onEnd: () => { if (voiceModeRef.current) startListening(scene.lang); } });
+      }, 400);
+    }
   };
 
   const closeScene = () => {
-    setActiveScene(null); setMessages([]); setChatInput('');
     if (window.speechSynthesis) window.speechSynthesis.cancel();
+    try { recognitionRef.current && recognitionRef.current.stop(); } catch {}
+    setIsListening(false);
+    setVoiceMode(false);
+    // 收集這次對話學到的東西（有 target 表示 AI 有教這句怎麼講）
+    const learned = messages.filter((m) => m.role === 'user' && m.target && m.target.trim());
+    if (learned.length > 0 && activeScene) {
+      setChatReview({
+        title: activeScene.title, lang: activeScene.lang,
+        items: learned.map((m) => ({ text: m.text, target: m.target, reading: m.reading || '', meaning: m.meaning || '', correction: m.correction || '' }))
+      });
+    }
+    setActiveScene(null); setMessages([]); setChatInput('');
+  };
+
+  // 自訂對話情境：使用者輸入主題，AI 設計角色與開場白
+  const generateCustomScene = async () => {
+    const topic = customSceneTopic.trim();
+    if (!topic || customSceneLoading) return;
+    setCustomSceneLoading(true);
+    try {
+      const langName = customSceneLang === 'ja-JP' ? '日文' : '英文';
+      const promptText = `使用者想練習的對話情境是「${topic}」，語言是${langName}。請設計一個角色扮演設定：
+1. role：AI 要扮演的角色身分，繁體中文，10 個字以內（例如「便利商店店員」「日本朋友」）。
+2. opener：角色的開場白，用${langName}寫，符合情境、自然、長度適中，適合語言學習者。`;
+      const responseSchema = {
+        type: 'OBJECT',
+        properties: { role: { type: 'STRING' }, opener: { type: 'STRING' } },
+        required: ['role', 'opener']
+      };
+      const parsed = await callBackend(promptText, responseSchema);
+      startScene({ id: 'custom', title: topic, role: parsed.role || 'AI 夥伴', lang: customSceneLang, opener: parsed.opener || (customSceneLang === 'ja-JP' ? 'こんにちは！' : 'Hello!') });
+      setCustomSceneTopic('');
+    } catch {
+      setVoiceWarn('建立情境時發生問題，請再試一次。');
+      setTimeout(() => setVoiceWarn(''), 4000);
+    } finally {
+      setCustomSceneLoading(false);
+    }
+  };
+
+  // 把對話回顧本裡的詞句存進字庫
+  const saveChatPhrases = (items, lang) => {
+    if (!items || !items.length) return;
+    const cat = { id: '對話', title: '對話練習', lang };
+    const list = items.map((it, i) => ({
+      word: it.target, reading: it.reading || '', translation: it.meaning || it.text,
+      sentence: '', sentenceReading: '', sentenceTranslation: '',
+      lang, id: `chat-${Date.now()}-${i}`
+    }));
+    writeCache(cat, list); refreshCounts();
+    if (SHEET_API_URL) pushToSheet(cat, list);
+    setVoiceWarn('已把 ' + list.length + ' 個詞存進字庫');
+    setTimeout(() => setVoiceWarn(''), 3000);
   };
 
   // 語音輸入：用講的回話。不支援時回 false（前端會提示退回打字）
@@ -799,7 +872,7 @@ ${levelInstr}
     setTimeout(() => setVoiceWarn(''), 3000);
   };
 
-  const startListening = () => {
+  const startListening = (langOverride) => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       setVoiceWarn('這個瀏覽器不支援語音輸入，請改用打字。（iPhone 建議用 Safari，Android 用 Chrome）');
@@ -813,7 +886,7 @@ ${levelInstr}
     }
     const rec = new SR();
     recognitionRef.current = rec;
-    rec.lang = activeScene.lang; // 用該情境語言辨識（日文情境就聽日文）
+    rec.lang = langOverride || (activeScene && activeScene.lang) || 'ja-JP'; // 用該情境語言辨識（日文情境就聽日文）
     rec.interimResults = true;
     rec.continuous = false;
     let finalText = '';
@@ -826,12 +899,18 @@ ${levelInstr}
       setChatInput(finalText + interim);
     };
     rec.onerror = () => { setIsListening(false); };
-    rec.onend = () => { setIsListening(false); };
+    rec.onend = () => {
+      setIsListening(false);
+      // 語音對話模式：講完自動送出，不用手動按送出鈕
+      if (voiceModeRef.current && finalText.trim()) {
+        sendChatText(finalText.trim());
+      }
+    };
     try { rec.start(); setIsListening(true); } catch { setIsListening(false); }
   };
 
-  const sendChat = async () => {
-    const text = chatInput.trim();
+  const sendChatText = async (rawText) => {
+    const text = String(rawText || '').trim();
     if (!text || chatLoading) return;
     const userMsg = { role: 'user', text };
     const nextMsgs = [...messages, userMsg];
@@ -842,7 +921,11 @@ ${levelInstr}
     const isJa = activeScene.lang === 'ja-JP';
     const langName = isJa ? '日文' : '英文';
     const readingHint = isJa ? '平假名與羅馬拼音' : 'KK 音標';
+    const levelHint = chatDifficulty === '進階'
+      ? '難度：進階。可使用自然道地、稍具變化的詞彙與句型，允許慣用語與較長句子，語氣自然如真人對話。'
+      : '難度：新手。使用簡單常用的詞彙與短句，避免生僻字或複雜文法，句子清楚易懂。';
     const systemPrompt = `你正在扮演「${activeScene.role}」，情境是「${activeScene.title}」，與一位正在學${langName}的學習者對話。目標語言＝${langName}。
+${levelHint}
 
 請判斷使用者「最後一句」是用目標語言、還是用中文打的：
 
@@ -859,7 +942,7 @@ ${levelInstr}
 - correction：用繁體中文鼓勵式說明「你想說的，${langName}可以這樣講」，點出關鍵字詞。
 
 兩種情況都要回覆對話本身：
-- reply：以${activeScene.role}身分，用${langName}自然回應 userTarget 的內容，簡短、難度適中、推進劇情。
+- reply：以${activeScene.role}身分，用${langName}自然回應 userTarget 的內容，簡短、符合上述難度、推進劇情。
 - replyReading：reply 的${readingHint}。
 - replyTranslation：reply 的繁體中文翻譯。
 語氣像親切的家教。`;
@@ -879,12 +962,21 @@ ${levelInstr}
       if (!data.ok || !data.text) throw new Error('empty');
       const parsed = safeParseJSON(data.text);
       // 立刻顯示 AI 回覆（user 那句的修正稍後補）
+      const aiIndex = nextMsgs.length; // 這則 AI 回覆在陣列中的索引
       setMessages((prev) => [...prev, {
         role: 'model', text: parsed.reply,
         reading: parsed.replyReading || '', translation: parsed.replyTranslation || '',
         correction: '', detailPending: true
       }]);
       setChatLoading(false);
+
+      // 語音對話模式：AI 回覆自動唸出，唸完自動再聽，不用手動操作
+      if (voiceModeRef.current) {
+        const rate = chatDifficulty === '進階' ? 1.0 : 0.78;
+        speak(parsed.reply, activeScene.lang, 'chat-' + aiIndex, {
+          rate, onEnd: () => { if (voiceModeRef.current) startListening(activeScene.lang); }
+        });
+      }
 
       // 第二階段（背景）：補使用者那句的 修正/讀音/意思/糾錯，不擋畫面
       fetch(API_ENDPOINT, {
@@ -924,6 +1016,7 @@ ${levelInstr}
       setChatLoading(false);
     }
   };
+  const sendChat = () => sendChatText(chatInput);
 
   const card = vocabList[currentIndex];
   const isJaCard = card?.lang === 'ja-JP';
@@ -1032,7 +1125,18 @@ ${levelInstr}
         </div>
 
         <div style={{ marginTop:'clamp(36px,5vw,52px)' }}>
-          <div style={{ fontSize:11, letterSpacing:'.25em', color:'var(--ink-soft)', textTransform:'uppercase', margin:'0 4px 16px', display:'flex', alignItems:'center', gap:10 }}>對話練習<span style={{ flex:1, height:1, background:'var(--rule)' }} /></div>
+          <div style={{ display:'flex', alignItems:'center', gap:10, margin:'0 4px 16px' }}>
+            <span style={{ fontSize:11, letterSpacing:'.25em', color:'var(--ink-soft)', textTransform:'uppercase', flexShrink:0 }}>對話練習</span>
+            <span style={{ flex:1, height:1, background:'var(--rule)' }} />
+            <div style={{ display:'flex', gap:3, background:'rgba(255,255,255,.5)', borderRadius:999, padding:3, border:'1px solid var(--rule)', flexShrink:0 }}>
+              {['新手','進階'].map((lv) => (
+                <button key={lv} onClick={() => updateChatDifficulty(lv)} className="lm-btn"
+                  style={{ fontSize:11, padding:'5px 11px', borderRadius:999, fontWeight:600,
+                    background: chatDifficulty === lv ? 'var(--accent)' : 'transparent',
+                    color: chatDifficulty === lv ? '#fff' : 'var(--ink-soft)' }}>{lv}</button>
+              ))}
+            </div>
+          </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))', gap:10 }}>
             {CHAT_SCENES.map((sc) => (
               <button key={sc.id} className="lm-btn lm-crystal"
@@ -1049,6 +1153,23 @@ ${levelInstr}
                 </span>
               </button>
             ))}
+          </div>
+          {/* 自訂對話情境 */}
+          <div style={{ marginTop:14 }}>
+            <div className="lm-crystal" style={{ display:'flex', alignItems:'center', gap:10, borderRadius:18, padding:'7px 7px 7px 16px' }}>
+              <select value={customSceneLang} onChange={(e) => setCustomSceneLang(e.target.value)} aria-label="語言"
+                style={{ background:'transparent', border:'none', borderRight:'1px solid var(--rule)', fontFamily:'Inter,sans-serif', fontSize:13, letterSpacing:'.05em', color:'var(--ink-soft)', padding:'9px 12px 9px 0', outline:'none', cursor:'pointer' }}>
+                <option value="ja-JP">日文</option><option value="en-US">英文</option>
+              </select>
+              <input value={customSceneTopic} onChange={(e) => setCustomSceneTopic(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && generateCustomScene()}
+                placeholder="自己想練習的情境，如：在藥妝店買藥" className="lm-jp-serif"
+                style={{ flex:1, minWidth:100, background:'transparent', border:'none', fontSize:15, color:'var(--ink)', padding:'9px 4px', outline:'none' }} />
+              <button onClick={generateCustomScene} disabled={!customSceneTopic.trim() || customSceneLoading} className="lm-btn"
+                style={{ flexShrink:0, width:44, height:44, borderRadius:13, border:'none', background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', opacity: (customSceneTopic.trim() && !customSceneLoading) ? 1 : 0.4, boxShadow:'0 4px 14px rgba(210,104,38,.4), inset 0 1px 2px rgba(255,255,255,.5)' }}>
+                {customSceneLoading ? <span className="lm-dot" style={{ background:'#fff' }} /> : <IcSparkles size={18} />}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1231,7 +1352,29 @@ ${levelInstr}
               style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (showTranslation ? 'var(--accent)' : 'var(--rule)'), color: showTranslation ? 'var(--accent)' : 'var(--ink-soft)', background: showTranslation ? 'rgba(232,132,60,.1)' : 'transparent' }}>
               中 翻譯 {showTranslation ? '開' : '關'}
             </button>
+            <button onClick={() => {
+                const next = !voiceMode;
+                setVoiceMode(next);
+                if (next && !chatLoading && !speakingId) startListening(activeScene.lang);
+                if (!next) { try { recognitionRef.current && recognitionRef.current.stop(); } catch {} setIsListening(false); }
+              }} className="lm-btn"
+              style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (voiceMode ? 'var(--accent)' : 'var(--rule)'), color: voiceMode ? '#fff' : 'var(--ink-soft)', background: voiceMode ? 'var(--accent)' : 'transparent', display:'flex', alignItems:'center', gap:5 }}>
+              <IcMic size={13} /> 語音對話 {voiceMode ? '開' : '關'}
+            </button>
+            <div style={{ display:'flex', gap:3, background:'rgba(255,255,255,.5)', borderRadius:999, padding:3, border:'1px solid var(--rule)' }}>
+              {['新手','進階'].map((lv) => (
+                <button key={lv} onClick={() => updateChatDifficulty(lv)} className="lm-btn"
+                  style={{ fontSize:11, padding:'5px 10px', borderRadius:999, fontWeight:600,
+                    background: chatDifficulty === lv ? 'var(--accent)' : 'transparent',
+                    color: chatDifficulty === lv ? '#fff' : 'var(--ink-soft)' }}>{lv}</button>
+              ))}
+            </div>
           </div>
+          {voiceMode && (
+            <div style={{ position:'relative', zIndex:10, padding:'6px clamp(18px,5vw,40px)', fontSize:12, color:'var(--accent)', display:'flex', alignItems:'center', gap:6, flexShrink:0 }}>
+              <span className="lm-dot" style={{ background:'var(--accent)' }} /> 語音對話中：AI 回覆會自動唸出，唸完自動聽你說話
+            </div>
+          )}
 
           {/* 對話區 */}
           <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', padding:'clamp(16px,4vw,32px) clamp(18px,5vw,40px)', display:'flex', flexDirection:'column', gap:18 }}>
@@ -1306,7 +1449,7 @@ ${levelInstr}
 
           {/* 輸入列 */}
           <div className="lm-safe-bottom" style={{ position:'relative', zIndex:10, display:'flex', gap:10, alignItems:'flex-end', padding:'clamp(12px,3vw,20px) clamp(18px,5vw,40px)', borderTop:'1px solid var(--rule)', flexShrink:0 }}>
-            <button onClick={startListening} className="lm-btn" aria-label="語音輸入"
+            <button onClick={() => startListening()} className="lm-btn" aria-label="語音輸入"
               style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', border:'1px solid ' + (isListening ? 'var(--accent)' : 'var(--rule)'), background: isListening ? 'var(--accent)' : 'transparent', color: isListening ? 'var(--paper)' : 'var(--ink-soft)', display:'flex', alignItems:'center', justifyContent:'center', transition:'all .2s', animation: isListening ? 'lm-pulse 1.2s infinite' : 'none' }}>
               <IcMic size={20} />
             </button>
@@ -1319,6 +1462,45 @@ ${levelInstr}
               style={{ flexShrink:0, width:46, height:46, borderRadius:'50%', background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', opacity: (!chatInput.trim()||chatLoading) ? 0.4 : 1, boxShadow:'0 4px 14px rgba(210,104,38,.4), inset 0 1px 2px rgba(255,255,255,.5)' }} aria-label="送出">
               <IcRight size={20} />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 對話回顧本：結束對話後，顯示這次學到的句子 */}
+      {chatReview && (
+        <div style={{ position:'fixed', inset:0, zIndex:65, background:'linear-gradient(160deg, rgba(244,241,236,.82) 0%, rgba(236,232,225,.85) 100%)', backdropFilter:'blur(40px)', WebkitBackdropFilter:'blur(40px)', display:'flex', flexDirection:'column' }} className="lm-rise">
+          <div style={{ position:'relative', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'clamp(16px,3vw,24px) clamp(18px,5vw,40px)', borderBottom:'1px solid var(--rule)', flexShrink:0 }}>
+            <div style={{ minWidth:0 }}>
+              <div className="lm-jp-serif" style={{ fontSize:'clamp(16px,2.5vw,20px)', fontWeight:500 }}>對話回顧・{chatReview.title}</div>
+              <div style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)' }}>這次對話學到 {chatReview.items.length} 句</div>
+            </div>
+            <button onClick={() => setChatReview(null)} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
+          </div>
+          <div className="lm-hide-scroll" style={{ position:'relative', zIndex:10, flex:1, overflowY:'auto', padding:'clamp(16px,4vw,32px) clamp(18px,5vw,40px)', display:'flex', flexDirection:'column', gap:12 }}>
+            {chatReview.items.map((it, i) => (
+              <div key={i} className="lm-crystal" style={{ borderRadius:18, padding:'16px 18px' }}>
+                <div style={{ fontSize:12, color:'var(--ink-soft)', marginBottom:6 }}>你說：{it.text}</div>
+                <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
+                  <p className="lm-jp-serif" style={{ fontSize:'clamp(16px,3vw,19px)', lineHeight:1.5, margin:0, color:'var(--ink)', fontWeight:500, flex:1 }}>{it.target}</p>
+                  <button onClick={() => speak(it.target, chatReview.lang, 'review-'+i)} className="lm-btn" aria-label="播放"
+                    style={{ flexShrink:0, width:30, height:30, borderRadius:'50%', background:'var(--accent)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center' }}><IcVolume size={13} /></button>
+                </div>
+                {it.reading && <p style={{ fontSize:12, color:'var(--ink-soft)', fontStyle:'italic', margin:'6px 0 0' }}>{it.reading}</p>}
+                {it.meaning && <p className="lm-serif" style={{ fontSize:13, color:'var(--ink-soft)', margin:'6px 0 0' }}>{it.meaning}</p>}
+                {it.correction && (
+                  <div style={{ marginTop:10, paddingTop:10, borderTop:'1px solid var(--rule)' }}>
+                    <div style={{ fontSize:11, color:'var(--accent)', fontWeight:600, marginBottom:4 }}>✎ 小老師</div>
+                    <p style={{ fontSize:13, lineHeight:1.6, margin:0, color:'var(--ink)' }}>{it.correction}</p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="lm-safe-bottom" style={{ position:'relative', zIndex:10, display:'flex', gap:10, padding:'clamp(12px,3vw,20px) clamp(18px,5vw,40px)', borderTop:'1px solid var(--rule)', flexShrink:0 }}>
+            <button onClick={() => setChatReview(null)} className="lm-btn"
+              style={{ flex:1, padding:'13px', borderRadius:999, border:'1px solid var(--rule)', color:'var(--ink)', background:'rgba(255,255,255,.5)', fontSize:14 }}>完成</button>
+            <button onClick={() => { saveChatPhrases(chatReview.items, chatReview.lang); setChatReview(null); }} className="lm-btn"
+              style={{ flex:1, padding:'13px', borderRadius:999, border:'none', color:'#fff', background:'linear-gradient(135deg,var(--accent-glow),var(--accent))', fontSize:14, fontWeight:600, boxShadow:'0 4px 14px rgba(210,104,38,.4)' }}>存入字庫</button>
           </div>
         </div>
       )}
