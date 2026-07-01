@@ -444,11 +444,17 @@ function App() {
   // 對話練習 state
   const [activeScene, setActiveScene] = useState(null);
   const [messages, setMessages] = useState([]); // {role:'user'|'model', text, reading, translation, correction}
+  const messagesRef = React.useRef([]); // 讓語音循環等延遲回呼永遠讀到「當下最新」的訊息，避免閉包過期蓋掉背景更新
+  React.useEffect(() => { messagesRef.current = messages; }, [messages]);
   const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
+  const [chatLoading, setChatLoadingState] = useState(false);
+  const chatLoadingRef = React.useRef(false);
+  const setChatLoading = (v) => { chatLoadingRef.current = v; setChatLoadingState(v); };
   const [showCorrection, setShowCorrection] = useState(true);
   const [showTranslation, setShowTranslation] = useState(true);
-  const [isListening, setIsListening] = useState(false);
+  const [isListening, setIsListeningState] = useState(false);
+  const isListeningRef = React.useRef(false);
+  const setIsListening = (v) => { isListeningRef.current = v; setIsListeningState(v); };
   const recognitionRef = React.useRef(null);
   // 語音對話模式（開了就用講的來回，AI 回覆會自動唸出、唸完自動再聽）
   const [voiceMode, setVoiceModeState] = useState(false);
@@ -680,12 +686,14 @@ function App() {
       window.speechSynthesis.speak(u);
     };
 
-    // 有些瀏覽器第一次 getVoices() 是空的，要等 voiceschanged
+    // 有些瀏覽器第一次 getVoices() 是空的，要等 voiceschanged；用旗標防止 onvoiceschanged 與保險 timeout 同時觸發兩次
     if ((window.speechSynthesis.getVoices() || []).length === 0) {
-      window.speechSynthesis.onvoiceschanged = () => { doSpeak(); window.speechSynthesis.onvoiceschanged = null; };
+      let fired = false;
+      const runOnce = () => { if (fired) return; fired = true; doSpeak(); };
+      window.speechSynthesis.onvoiceschanged = () => { runOnce(); window.speechSynthesis.onvoiceschanged = null; };
       // 觸發載入
       window.speechSynthesis.getVoices();
-      setTimeout(doSpeak, 250); // 保險
+      setTimeout(runOnce, 250); // 保險
     } else {
       doSpeak();
     }
@@ -732,11 +740,11 @@ function App() {
 
   const closeScene = () => {
     if (window.speechSynthesis) window.speechSynthesis.cancel();
-    try { recognitionRef.current && recognitionRef.current.stop(); } catch {}
+    try { if (recognitionRef.current) { recognitionRef.current._abandoned = true; recognitionRef.current.stop(); } } catch {}
     setIsListening(false);
     setVoiceMode(false);
     // 收集這次對話學到的東西（有 target 表示 AI 有教這句怎麼講）
-    const learned = messages.filter((m) => m.role === 'user' && m.target && m.target.trim());
+    const learned = messagesRef.current.filter((m) => m.role === 'user' && m.target && m.target.trim());
     if (learned.length > 0 && activeScene) {
       setChatReview({
         title: activeScene.title, lang: activeScene.lang,
@@ -775,7 +783,7 @@ function App() {
   // 把對話回顧本裡的詞句存進字庫
   const saveChatPhrases = (items, lang) => {
     if (!items || !items.length) return;
-    const cat = { id: '對話', title: '對話練習', lang };
+    const cat = { id: '對話', title: lang === 'ja-JP' ? '對話練習（日文）' : '對話練習（英文）', lang };
     const list = items.map((it, i) => ({
       word: it.target, reading: it.reading || '', translation: it.meaning || it.text,
       sentence: '', sentenceReading: '', sentenceTranslation: '',
@@ -879,7 +887,7 @@ ${levelInstr}
       setTimeout(() => setVoiceWarn(''), 6000);
       return;
     }
-    if (isListening) { // 再按一次＝停止
+    if (isListeningRef.current) { // 再按一次＝停止
       try { recognitionRef.current && recognitionRef.current.stop(); } catch {}
       setIsListening(false);
       return;
@@ -901,6 +909,7 @@ ${levelInstr}
     rec.onerror = () => { setIsListening(false); };
     rec.onend = () => {
       setIsListening(false);
+      if (rec._abandoned) return; // 被程式主動中止（例如中途改用打字送出），不要把殘留文字誤當成新訊息
       // 語音對話模式：講完自動送出，不用手動按送出鈕
       if (voiceModeRef.current && finalText.trim()) {
         sendChatText(finalText.trim());
@@ -911,9 +920,19 @@ ${levelInstr}
 
   const sendChatText = async (rawText) => {
     const text = String(rawText || '').trim();
-    if (!text || chatLoading) return;
+    if (!text || chatLoadingRef.current) return;
+    // 若麥克風還在聽（例如語音模式中途改用打字送出），先中止殘留的辨識工作階段：
+    // 標記為「已放棄」，避免它結束時把捕捉到一半的殘留文字誤當成新訊息自動送出，
+    // 同時確保 isListening 立刻歸零，讓 AI 回覆播完後的自動再聽能正常重新啟動。
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current._abandoned = true;
+        recognitionRef.current.abort ? recognitionRef.current.abort() : recognitionRef.current.stop();
+      } catch {}
+      setIsListening(false);
+    }
     const userMsg = { role: 'user', text };
-    const nextMsgs = [...messages, userMsg];
+    const nextMsgs = [...messagesRef.current, userMsg];
     setMessages(nextMsgs);
     setChatInput('');
     setChatLoading(true);
@@ -1356,7 +1375,7 @@ ${levelHint}
                 const next = !voiceMode;
                 setVoiceMode(next);
                 if (next && !chatLoading && !speakingId) startListening(activeScene.lang);
-                if (!next) { try { recognitionRef.current && recognitionRef.current.stop(); } catch {} setIsListening(false); }
+                if (!next) { try { if (recognitionRef.current) { recognitionRef.current._abandoned = true; recognitionRef.current.stop(); } } catch {} setIsListening(false); }
               }} className="lm-btn"
               style={{ fontSize:12, padding:'6px 12px', borderRadius:999, border:'1px solid ' + (voiceMode ? 'var(--accent)' : 'var(--rule)'), color: voiceMode ? '#fff' : 'var(--ink-soft)', background: voiceMode ? 'var(--accent)' : 'transparent', display:'flex', alignItems:'center', gap:5 }}>
               <IcMic size={13} /> 語音對話 {voiceMode ? '開' : '關'}
