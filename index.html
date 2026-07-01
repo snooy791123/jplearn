@@ -519,6 +519,7 @@ function App() {
     if (next >= reviewQueue.length) {
       // 複習結束：一次把進度同步到雲端
       if (SHEET_API_URL && srsPendingRef.current.length) pushSrsToSheet(srsPendingRef.current);
+      srsPendingRef.current = []; // 清空，避免使用者按「關閉」時 closeReview 又重複推送一次
       refreshCounts();
       setReviewIndex(next); // 觸發結算畫面
     } else {
@@ -534,7 +535,9 @@ function App() {
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   };
 
+  const vocabRequestRef = React.useRef(0); // 請求版本標記：避免快速切換級別時，較慢的舊回應蓋掉新選的級別
   const loadVocab = async (category, forceAI = false) => {
+    const myRequestId = ++vocabRequestRef.current;
     setIsLoading(true); setErrorMsg(''); setShowStoryView(false);
     setStoryData(null); setStoryError(''); setFlipped(false);
     if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -563,13 +566,17 @@ function App() {
     try {
       const parsed = await callBackend(promptText, responseSchema);
       if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('Invalid');
+      if (vocabRequestRef.current !== myRequestId) return; // 使用者已切到別的級別，這批回應過期了，不套用
       const fresh = parsed.map((item, i) => ({ ...item, lang: category.lang, id: `${Date.now()}-${i}` }));
       setVocabList(fresh); setCurrentIndex(0); setFlipped(false); setSource('ai');
       writeCache(category, fresh); refreshCounts();
       if (SHEET_API_URL) { setCloudState('syncing'); pushToSheet(category, fresh).then(ok => setCloudState(ok ? 'ok' : 'error')); }
     } catch {
+      if (vocabRequestRef.current !== myRequestId) return; // 同上
       setErrorMsg('生成單字時發生問題，請按「換一批」再試一次。'); setVocabList([]);
-    } finally { setIsLoading(false); }
+    } finally {
+      if (vocabRequestRef.current === myRequestId) setIsLoading(false);
+    }
   };
 
   const generateStoryFromAI = async () => {
@@ -707,6 +714,7 @@ function App() {
   };
 
   const closeOverlay = () => {
+    vocabRequestRef.current++; // 讓還在飛行中的請求失效，回來也不會套用到已關閉的畫面
     setActiveCategory(null); setVocabList([]); setCurrentIndex(0); setErrorMsg('');
     setShowStoryView(false); setStoryData(null); setStoryError(''); setSpeakingId(null);
     setFlipped(false); setSource('');
@@ -815,7 +823,9 @@ function App() {
   };
 
   // 點開一則新聞，讓 Gemini 依難度加讀音/翻譯/難詞
+  const articleRequestRef = React.useRef(0); // 請求版本標記：避免使用者切到別篇後，較慢的舊回應蓋掉新內容
   const openArticle = async (item) => {
+    const myRequestId = ++articleRequestRef.current;
     setActiveArticle({ ...item, processed: null });
     setArticleLoading(true);
 
@@ -857,11 +867,13 @@ ${levelInstr}
       const data = await r.json();
       if (!data.ok || !data.text) throw new Error('empty');
       const parsed = safeParseJSON(data.text);
+      if (articleRequestRef.current !== myRequestId) return; // 使用者已切到別篇，這個回應過期了，不套用
       setActiveArticle({ ...item, processed: parsed });
     } catch {
+      if (articleRequestRef.current !== myRequestId) return; // 同上
       setActiveArticle({ ...item, processed: { error: '處理這則新聞時發生問題，請返回再試一次。' } });
     } finally {
-      setArticleLoading(false);
+      if (articleRequestRef.current === myRequestId) setArticleLoading(false);
     }
   };
 
@@ -1538,7 +1550,7 @@ ${levelHint}
                 <div style={{ fontSize:11, letterSpacing:'.1em', color:'var(--ink-soft)' }}>來源：NHK ニュース</div>
               </div>
             </div>
-            <button onClick={() => { setShowNews(false); setActiveArticle(null); if (window.speechSynthesis) window.speechSynthesis.cancel(); }} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
+            <button onClick={() => { articleRequestRef.current++; setShowNews(false); setActiveArticle(null); if (window.speechSynthesis) window.speechSynthesis.cancel(); }} className="lm-btn" aria-label="關閉" style={{ color:'var(--ink-soft)', padding:6 }}><IcX size={24} /></button>
           </div>
 
           {/* 難度切換（只在清單頁顯示） */}
@@ -1559,7 +1571,7 @@ ${levelHint}
             {activeArticle ? (
               /* 單篇閱讀 */
               <div style={{ maxWidth:680, margin:'0 auto' }} className="lm-rise">
-                <button onClick={() => setActiveArticle(null)} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink-soft)', fontSize:13, marginBottom:20 }}><IcArrowLeft size={16} /> 返回清單</button>
+                <button onClick={() => { articleRequestRef.current++; setActiveArticle(null); }} className="lm-btn" style={{ display:'flex', alignItems:'center', gap:6, color:'var(--ink-soft)', fontSize:13, marginBottom:20 }}><IcArrowLeft size={16} /> 返回清單</button>
                 <h2 className="lm-jp-serif" style={{ fontSize:'clamp(20px,4vw,28px)', fontWeight:600, lineHeight:1.5, margin:'0 0 8px' }}>{activeArticle.title}</h2>
                 <div style={{ fontSize:11, color:'var(--ink-soft)', marginBottom:24 }}>{activeArticle.pubDate}</div>
 
