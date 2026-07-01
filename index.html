@@ -1584,7 +1584,10 @@ ${levelHint}
                   <p className="lm-serif" style={{ fontSize:15, color:'#A35', textAlign:'center', padding:'30px 0' }}>{activeArticle.processed.error}</p>
                 ) : activeArticle.processed ? (
                   <div>
-                    <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
+                    <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginBottom:10 }}>
+                      <button onClick={() => speak(activeArticle.processed.simplified, 'ja-JP', 'news-normal')} className="lm-btn"
+                        style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:12, color: speakingId==='news-normal' ? '#fff' : 'var(--ink)', background: speakingId==='news-normal' ? 'var(--accent)' : 'rgba(255,255,255,.5)', border:'1px solid var(--rule)', borderRadius:999, padding:'7px 16px' }}>
+                        <IcVolume size={14} /> 一般朗讀</button>
                       <button onClick={() => speakHQ(activeArticle.processed.simplified, 'news')} className="lm-btn"
                         style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:12, color:'var(--accent)', border:'1px solid var(--accent)', borderRadius:999, padding:'7px 16px' }}>
                         {hqLoadingId==='news' ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={14} />} ✨高品質朗讀</button>
