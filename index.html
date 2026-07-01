@@ -294,6 +294,16 @@ const pullFromSheet = async () => {
 };
 
 // 容錯解析 AI 回傳的 JSON：剝除 markdown 圍欄、抽出 JSON 主體再 parse
+// 朗讀前，把「漢字（假名讀音）」這種括號輔助讀音拿掉，避免 TTS 把讀音又唸一次（聽起來像重複兩遍）。
+// 只挑「括號內全部是假名」的情況，避免誤刪新聞原文裡正常的括號內容（例如引用來源、數字）。
+const stripFurigana = (text) => {
+  if (!text) return text;
+  return text
+    .replace(/[（(][ぁ-んァ-ヶー]+[）)]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
 const safeParseJSON = (text) => {
   if (typeof text !== 'string') return text;
   let t = text.trim();
@@ -1585,10 +1595,10 @@ ${levelHint}
                 ) : activeArticle.processed ? (
                   <div>
                     <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginBottom:10 }}>
-                      <button onClick={() => speak(activeArticle.processed.simplified, 'ja-JP', 'news-normal')} className="lm-btn"
+                      <button onClick={() => speak(stripFurigana(activeArticle.processed.simplified), 'ja-JP', 'news-normal')} className="lm-btn"
                         style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:12, color: speakingId==='news-normal' ? '#fff' : 'var(--ink)', background: speakingId==='news-normal' ? 'var(--accent)' : 'rgba(255,255,255,.5)', border:'1px solid var(--rule)', borderRadius:999, padding:'7px 16px' }}>
                         <IcVolume size={14} /> 一般朗讀</button>
-                      <button onClick={() => speakHQ(activeArticle.processed.simplified, 'news')} className="lm-btn"
+                      <button onClick={() => speakHQ(stripFurigana(activeArticle.processed.simplified), 'news')} className="lm-btn"
                         style={{ display:'inline-flex', alignItems:'center', gap:7, fontSize:12, color:'var(--accent)', border:'1px solid var(--accent)', borderRadius:999, padding:'7px 16px' }}>
                         {hqLoadingId==='news' ? <span className="lm-dot" style={{ background:'var(--accent)' }} /> : <IcVolume size={14} />} ✨高品質朗讀</button>
                     </div>
